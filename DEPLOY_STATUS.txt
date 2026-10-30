@@ -2,14 +2,21 @@ STATUS: LIVE
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Deploy: dep-dbi5tjafngtc73ccuqv0 status=live (Asia/Shanghai 2026-10-30 17:10)
-Commit: 6527818 Saihu packing: only 7 装箱信息 cols with forward-fill
+Deploy: dep-dbi61crbc2fs73a7a540 status=live (Asia/Shanghai 2026-10-30 17:18)
+Commit: 1bd16d3 Fix Saihu full packing parse + per-ticket first-leg calc
 
-Saihu 装箱信息 (step 2):
-  - Columns: 货件编号, 总箱数, 总重量, SKU, 单箱数量, 箱数, 箱子重量(kg)
-  - Continuation SKU rows: forward-fill 货件编号/总箱数/总重量/箱数/箱子重量
-  - Qty = 单箱数量×箱数; shipment gross = 总重量 or 箱子重量 (no double-count)
-  - Unit packed weight: optional upload only (multi-SKU); missing → skip those tickets
+Root cause of undercount:
+  - Saihu often leaves SKU blank while MSKU is filled; parser only read SKU → dropped lines
+  - FBA-only rows did not update forward-fill, so following SKUs attached to wrong FBA
+  - UI row_count was aggregated (fba,sku) unique pairs (75), not Excel detail lines
+  - No detail table in UI
 
-User sample attachment: rows=75 fbas=56 (was 56/56 when continuation SKUs skipped)
+After fix (sample_saihu_sept.xlsx): detail=114 agg=86 fba=62 (was 75/56)
+After fix (sample_saihu_user.xlsx trimmed): detail=104 agg=76 fba=58 (was 75/56)
+
+Saihu step 2: full detail table (货件编号,总箱数,总重量,SKU,单箱数量,箱数,箱子重量) scrollable
+Step 3: per-ticket only — select 票 → enter unit packed weights for multi-SKU → 计算本票
+  Single-SKU: no unit weight required. Multi-SKU missing weight: blocked/skipped clearly.
+  No batch allocate-all.
+
 verify_sample.py: ALL PASS
