@@ -13,6 +13,16 @@ WEIGHT_ALIASES = ("收费重(KG/CBM)", "收费重", "计费重", "计费重量",
 AMOUNT_CNY_ALIASES = ("折合人民币", "折算人民币", "本位币金额")
 AMOUNT_ALIASES = ("金额",)
 FBA_TOKEN_RE = re.compile(r"FBA[A-Z0-9]+", re.IGNORECASE)
+# Footer / bank lines that appear under detail tables (not fee rows).
+_JUNK_WAYBILL_MARKERS = (
+    "收款",
+    "账户",
+    "账号",
+    "公司名称",
+    "开户银行",
+    "备注",
+    "合计",
+)
 
 
 @dataclass
@@ -42,6 +52,7 @@ class FreightRow:
     customs_mode: str
     fba_ids: list[str]  # from 扩展单号 (prefer) / 客户单号 fallback
     shop: str = ""
+    sheet: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -125,6 +136,14 @@ def _parse_fba_ids(customer_no: str, ext_nos: str) -> list[str]:
     return []
 
 
+def _is_junk_waybill(waybill: str) -> bool:
+    compact = waybill.replace(" ", "").replace("\u3000", "")
+    for m in _JUNK_WAYBILL_MARKERS:
+        if m in waybill or m in compact:
+            return True
+    return False
+
+
 def detect_detail_sheets(path: str) -> list[str]:
     wb = load_workbook(path, data_only=True, read_only=True)
     try:
@@ -147,29 +166,36 @@ def detect_detail_sheets(path: str) -> list[str]:
 
 
 def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict[str, Any]:
-    """Parse a Meitong-style bill. Returns summary + freight rows (费用类型=运费 only)."""
+    """Parse a Meitong-style bill. Merges all detail sheets; no fee-type filter.
+
+    User is expected to delete 税金/清关费 rows before upload. Every remaining
+    data row is treated as bill cost (freight) for allocation.
+    """
     wb = load_workbook(path, data_only=True)
     try:
         if sheet_name and sheet_name in wb.sheetnames:
             sheets = [sheet_name]
         else:
-            sheets = [n for n in wb.sheetnames if "汇总" not in n]
+            sheets = [
+                n
+                for n in wb.sheetnames
+                if "汇总" not in n and "summary" not in n.lower()
+            ]
             if not sheets:
                 sheets = list(wb.sheetnames)
 
         all_rows: list[FreightRow] = []
-        used_sheet = None
-        header_row = None
-        skipped_fee_types: dict[str, int] = {}
-        skipped_other = 0
+        used_sheets: list[str] = []
+        header_rows: dict[str, int] = {}
 
         for name in sheets:
             ws = wb[name]
             found = _find_header_row(ws)
             if not found:
                 continue
-            used_sheet = name
             header_row, cols = found
+            used_sheets.append(name)
+            header_rows[name] = header_row
             col_waybill = cols["运单号"]
             col_fee = cols["费用类型"]
             col_date = cols.get("日期")
@@ -201,16 +227,9 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                     continue
                 if not waybill:
                     continue
-                if waybill.startswith("收款") or "账户" in waybill or "公司名称" in waybill:
+                if _is_junk_waybill(waybill):
                     continue
-                if "合计" in waybill or "合计" in fee:
-                    continue
-
-                if fee != "运费":
-                    if fee:
-                        skipped_fee_types[fee] = skipped_fee_types.get(fee, 0) + 1
-                    else:
-                        skipped_other += 1
+                if fee and "合计" in fee:
                     continue
 
                 weight = _to_float(ws.cell(r, col_weight).value) if col_weight else None
@@ -227,7 +246,7 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                 row = FreightRow(
                     row_index=r,
                     waybill_no=waybill,
-                    fee_type=fee,
+                    fee_type=fee or "运费",
                     date=_norm(ws.cell(r, col_date).value) if col_date else "",
                     customer_no=customer_no,
                     tracking_no=_norm(ws.cell(r, col_tracking).value) if col_tracking else "",
@@ -250,11 +269,9 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                     customs_mode=_norm(ws.cell(r, col_customs).value) if col_customs else "",
                     fba_ids=_parse_fba_ids(customer_no, ext_nos),
                     shop=shop,
+                    sheet=name,
                 )
                 all_rows.append(row)
-
-            if all_rows:
-                break
 
         tickets: dict[str, dict[str, Any]] = {}
         for row in all_rows:
@@ -270,7 +287,9 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                 },
             )
             t["freight_total"] += row.amount_cny
-            t["weight_total"] += row.chargeable_weight
+            # Same waybill often repeats chargeable weight on 清关费/税金 lines;
+            # take max so weight is not double-counted across fee rows.
+            t["weight_total"] = max(t["weight_total"], row.chargeable_weight or 0.0)
             t["line_count"] += 1
             for fid in row.fba_ids:
                 if fid not in t["fba_ids"]:
@@ -279,18 +298,24 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                 t["customer_nos"].append(row.customer_no)
 
         total_freight = sum(r.amount_cny for r in all_rows)
-        total_weight = sum(r.chargeable_weight for r in all_rows)
+        # Prefer sum of per-ticket weights (avoids multi-fee double count)
+        total_weight = sum(t["weight_total"] for t in tickets.values())
+
+        sheet_label = " + ".join(used_sheets) if used_sheets else None
+        header_row = header_rows.get(used_sheets[0]) if used_sheets else None
 
         return {
             "ok": True,
-            "sheet": used_sheet,
+            "sheet": sheet_label,
+            "sheets": used_sheets,
             "header_row": header_row,
+            "header_rows": header_rows,
             "shop": shop,
             "freight_row_count": len(all_rows),
             "ticket_count": len(tickets),
             "total_freight": round(total_freight, 4),
             "total_weight": round(total_weight, 4),
-            "skipped_fee_types": skipped_fee_types,
+            "skipped_fee_types": {},
             "rows": [r.to_dict() for r in all_rows],
             "tickets": list(tickets.values()),
         }

@@ -143,7 +143,7 @@ def upload_bill():
         flash(f"解析账单失败: {e}", "error")
         return redirect(url_for("index"))
     if not result.get("rows"):
-        flash("未解析到运费行，请确认文件含明细表且费用类型含「运费」", "error")
+        flash("未解析到账单明细行，请确认文件含明细表（已跳过汇总表）", "error")
     else:
         flash(
             f"账单解析成功：运费合计 ¥{result['total_freight']:.2f}，"
@@ -364,7 +364,7 @@ def export_freight():
                 "运单数": bill.get("ticket_count"),
                 "运费合计_CNY": bill.get("total_freight"),
                 "收费重合计": bill.get("total_weight"),
-                "排除费用类型": json.dumps(bill.get("skipped_fee_types") or {}, ensure_ascii=False),
+                "明细表列表": ",".join(bill.get("sheets") or ([bill.get("sheet")] if bill.get("sheet") else [])),
                 "导出时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
         ],

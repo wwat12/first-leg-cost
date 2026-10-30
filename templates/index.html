@@ -32,12 +32,12 @@
         <li><strong>SKU 分摊</strong>：SKU总重量＝发货数量×单件含包装重量；SKU分摊＝货件运费×SKU总重÷货件内SKU总重之和。<strong>货件内仅 1 个 SKU 时，货件运费全归该 SKU</strong>（无需单件重量）</li>
         <li><strong>单件头程</strong>＝SKU分摊÷数量；同一 SKU 出现在多个货件时：合计分摊÷合计数量</li>
       </ol>
-      <p class="hint">匹配规则：账单只取费用类型＝<strong>运费</strong>，按<strong>运单号</strong>成票；货件列表取自 <strong>G 列「扩展单号」</strong>中的 FBA… 号，与赛狐<strong>装箱信息</strong>的<strong>货件编号</strong>对应。重量单位 kg。不同店铺分别计算（有店铺列时按店铺+SKU 汇总）。</p>
+      <p class="hint">匹配规则：账单按<strong>运单号</strong>成票（上传前请自行删掉税金/清关费等非运费行；网站不再按费用类型筛选）；货件列表取自 <strong>G 列「扩展单号」</strong>中的 FBA… 号，与赛狐<strong>装箱信息</strong>的<strong>货件编号</strong>对应。重量单位 kg。不同店铺分别计算（有店铺列时按店铺+SKU 汇总）。</p>
     </section>
 
     <section class="card" id="bill">
       <h2>① 上传物流账单</h2>
-      <p class="hint">美通风格对账单 .xlsx。自动跳过「汇总」表；仅统计费用类型＝运费；金额用「折合人民币」；<strong>货件号以 G 列扩展单号为准</strong>。</p>
+      <p class="hint">美通风格对账单 .xlsx。自动合并全部明细表、跳过「汇总」表；金额用「折合人民币」；请上传前自行删除税金/清关费行（网站不筛选费用类型）；<strong>货件号以 G 列扩展单号为准</strong>。</p>
       <form method="post" action="{{ url_for('upload_bill') }}" enctype="multipart/form-data">
         <div class="row">
           <label>账单文件 (.xlsx)</label>
@@ -55,11 +55,7 @@
         <div class="stat"><div class="num">{{ bill.freight_row_count }}</div><div class="lbl">运费行数</div></div>
         <div class="stat"><div class="num">{{ '%.1f'|format(bill.total_weight) }}</div><div class="lbl">收费重合计 kg</div></div>
       </div>
-      <p class="meta">明细表：<code>{{ bill.sheet }}</code> · 表头行：{{ bill.header_row }}
-        {% if bill.skipped_fee_types %}
-          · 已排除：{% for k,v in bill.skipped_fee_types.items() %}{{ k }}×{{ v }} {% endfor %}
-        {% endif %}
-      </p>
+      <p class="meta">明细表：<code>{{ bill.sheet }}</code> · 表头行：{{ bill.header_row }}</p>
       <div class="table-wrap">
         <table>
           <thead>
