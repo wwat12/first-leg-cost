@@ -442,3 +442,9 @@ code {
 .ship-block:last-of-type { border-bottom: 0; }
 .ticket-calc { margin-top: 12px; }
 .wrap { max-width: 1080px; }
+
+.calc-expr { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f8fafc; padding: 6px 10px; border-radius: 6px; margin: 4px 0 8px; }
+.calc-block { margin: 8px 0 12px; }
+.rules.tight { margin: 4px 0 8px; padding-left: 1.2em; }
+.rules.tight li { margin: 2px 0; }
+.ticket-group .ship-block { margin: 8px 0; }

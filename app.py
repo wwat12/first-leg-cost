@@ -107,7 +107,7 @@ def _saihu_rows_with_weights(state: dict, extra_weights: dict[str, float] | None
 
 
 def _ticket_packing_preview(state: dict, ticket_id: str) -> dict:
-    """SKUs / multi-SKU flags for one bill ticket, for the per-ticket weight form."""
+    """Ticket + matched FBAs + packing lines together for verification / weight form."""
     bill = state.get("bill") or {}
     saihu = state.get("saihu") or {}
     rows = [r for r in (bill.get("rows") or []) if str(r.get("ticket_id") or "") == ticket_id]
@@ -119,6 +119,13 @@ def _ticket_packing_preview(state: dict, ticket_id: str) -> dict:
             if fid and fid not in fba_ids:
                 fba_ids.append(fid)
     unit_weights = state.get("unit_weights") or {}
+    # Prefer detail_rows (full packing cols); fall back to aggregated rows
+    detail = saihu.get("detail_rows") or []
+    by_fba_detail: dict[str, list[dict]] = {}
+    for d in detail:
+        fid = d.get("fba_id")
+        if fid in fba_ids:
+            by_fba_detail.setdefault(fid, []).append(d)
     by_fba: dict[str, list[dict]] = {}
     for s in saihu.get("rows") or []:
         fid = s.get("fba_id")
@@ -132,6 +139,7 @@ def _ticket_packing_preview(state: dict, ticket_id: str) -> dict:
     skus_needing_weight: list[str] = []
     for fid in fba_ids:
         lines = by_fba.get(fid) or []
+        packing_lines = by_fba_detail.get(fid) or lines
         multi = len(lines) > 1
         missing = [x["sku"] for x in lines if float(x.get("unit_weight") or 0) <= 0]
         if multi and missing:
@@ -139,6 +147,16 @@ def _ticket_packing_preview(state: dict, ticket_id: str) -> dict:
             for sku in missing:
                 if sku not in skus_needing_weight:
                     skus_needing_weight.append(sku)
+        # Enrich agg lines with packing fields when detail available
+        display_lines = []
+        if by_fba_detail.get(fid):
+            for d in packing_lines:
+                rr = dict(d)
+                if float(rr.get("unit_weight") or 0) <= 0 and rr.get("sku") in unit_weights:
+                    rr["unit_weight"] = float(unit_weights[rr["sku"]])
+                display_lines.append(rr)
+        else:
+            display_lines = lines
         shipments.append(
             {
                 "fba_id": fid,
@@ -146,7 +164,8 @@ def _ticket_packing_preview(state: dict, ticket_id: str) -> dict:
                 "multi_sku": multi,
                 "gross_weight": (saihu.get("shipment_weights") or {}).get(fid)
                 or (lines[0].get("shipment_gross_weight") if lines else 0),
-                "lines": lines,
+                "lines": display_lines,
+                "agg_lines": lines,
                 "missing_unit_weight_skus": missing if multi else [],
             }
         )
@@ -171,12 +190,14 @@ def index():
     if selected_ticket and state.get("bill") and state.get("saihu"):
         ticket_preview = _ticket_packing_preview(state, selected_ticket)
     ticket_allocs = state.get("ticket_allocs") or {}
+    alloc = state.get("alloc")
     return render_template(
         "index.html",
         bill=state.get("bill"),
         saihu=state.get("saihu"),
-        alloc=state.get("alloc"),
+        alloc=alloc,
         ticket_allocs=ticket_allocs,
+        tickets_grouped=(alloc or {}).get("tickets_grouped") or [],
         selected_ticket_id=selected_ticket,
         ticket_preview=ticket_preview,
         current_ticket_result=state.get("current_ticket_result"),
@@ -255,11 +276,10 @@ def upload_saihu():
         state["saihu"] = auto
         state.pop("saihu_peek", None)
         _save_state(state)
-        shops = "、".join(auto.get("shops") or []) or "（未识别店铺，输出仍保留店铺列）"
         flash(
             f"装箱信息解析成功：{auto['row_count']} 条明细"
             f"（聚合 {auto.get('agg_row_count', auto['row_count'])} 个货件×SKU），"
-            f"{auto['fba_count']} 个货件，{auto['sku_count']} 个 SKU；店铺：{shops}",
+            f"{auto['fba_count']} 个货件，{auto['sku_count']} 个 SKU",
             "ok",
         )
         return redirect(url_for("index") + "#allocate")
@@ -299,7 +319,6 @@ def parse_saihu_route():
         "qty": request.form.get("map_qty") or "",
         "unit_weight": request.form.get("map_unit_weight") or "",
         "total_weight": request.form.get("map_total_weight") or "",
-        "shop": request.form.get("map_shop") or "",
     }
     result = parse_saihu(
         path,
@@ -469,6 +488,9 @@ def allocate_ticket_route():
         flash(state["alloc_error"], "error")
         return redirect(url_for("index") + "#result")
 
+    # Attach packing preview so UI can group ticket + FBAs + packing + calc together
+    result["packing_preview"] = preview if preview.get("ok") else None
+
     # Persist this ticket's result
     ticket_allocs = dict(state.get("ticket_allocs") or {})
     ticket_allocs[ticket_id] = result
@@ -494,14 +516,15 @@ def allocate_ticket_route():
 
 
 def _merge_ticket_allocs(ticket_allocs: dict) -> dict:
-    """Merge per-ticket results into a cumulative alloc for export / summary."""
-    sku_map: dict[tuple[str, str], dict] = {}
+    """Merge per-ticket results into a cumulative alloc for export / summary (SKU only)."""
+    sku_map: dict[str, dict] = {}
     shipment_allocs: list = []
     unmatched: list = []
     multi_missing: list = []
     matched_fba: set[str] = set()
     included = 0.0
-    for res in ticket_allocs.values():
+    tickets_grouped: list = []
+    for tid, res in ticket_allocs.items():
         included += float(res.get("included_bill_freight") or 0)
         shipment_allocs.extend(res.get("shipment_allocs") or [])
         unmatched.extend(res.get("unmatched_freight") or [])
@@ -512,11 +535,10 @@ def _merge_ticket_allocs(ticket_allocs: dict) -> dict:
             for fid in (r.get("fba_ids") or [])
         )
         for r in res.get("sku_results") or []:
-            key = (r.get("shop") or "", r["sku"])
+            key = r["sku"]
             agg = sku_map.setdefault(
                 key,
                 {
-                    "shop": r.get("shop") or "",
                     "sku": r["sku"],
                     "total_freight": 0.0,
                     "total_qty": 0.0,
@@ -528,12 +550,23 @@ def _merge_ticket_allocs(ticket_allocs: dict) -> dict:
             agg["total_qty"] += float(r["total_qty"])
             agg["shipment_count"] += int(r.get("shipment_count") or 0)
             agg["fba_ids"].update(r.get("fba_ids") or [])
+        tickets_grouped.append(
+            {
+                "ticket_id": res.get("ticket_id") or tid,
+                "ext_nos": res.get("ext_nos") or "",
+                "ticket_freight": res.get("ticket_freight") or res.get("included_bill_freight"),
+                "fba_ids": res.get("fba_ids") or [],
+                "sku_results": res.get("sku_results") or [],
+                "shipment_allocs": res.get("shipment_allocs") or [],
+                "calc_steps": res.get("calc_steps") or [],
+                "packing_preview": res.get("packing_preview"),
+            }
+        )
     sku_results = []
-    for agg in sorted(sku_map.values(), key=lambda x: (x["shop"], x["sku"])):
+    for agg in sorted(sku_map.values(), key=lambda x: x["sku"]):
         qty = agg["total_qty"]
         sku_results.append(
             {
-                "shop": agg["shop"],
                 "sku": agg["sku"],
                 "total_freight": round(agg["total_freight"], 6),
                 "total_qty": qty,
@@ -555,6 +588,7 @@ def _merge_ticket_allocs(ticket_allocs: dict) -> dict:
         "allocation_balance_ok": abs(total_allocated - round(included, 4)) < 0.05,
         "multi_sku_missing_unit_weight": multi_missing,
         "tickets_done": len(ticket_allocs),
+        "tickets_grouped": tickets_grouped,
     }
 
 
@@ -617,7 +651,6 @@ def export_sku():
     for r in alloc["sku_results"]:
         sku_rows.append(
             {
-                "店铺": r.get("shop") or "",
                 "SKU": r["sku"],
                 "总发货数量": r["total_qty"],
                 "分摊运费合计": r["total_freight"],
@@ -633,7 +666,6 @@ def export_sku():
     for r in alloc.get("shipment_allocs") or []:
         detail_rows.append(
             {
-                "店铺": r.get("shop") or "",
                 "票标识": r.get("ticket_id") or r.get("waybill_no") or "",
                 "扩展单号": r.get("ext_nos") or "",
                 "FBA货件号": r["fba_id"],

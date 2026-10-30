@@ -2,21 +2,15 @@ STATUS: LIVE
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Deploy: dep-dbi61crbc2fs73a7a540 status=live (Asia/Shanghai 2026-10-30 17:18)
-Commit: 1bd16d3 Fix Saihu full packing parse + per-ticket first-leg calc
+Deploy: (pending push) Asia/Shanghai 2026-10-30 ~17:30
 
-Root cause of undercount:
-  - Saihu often leaves SKU blank while MSKU is filled; parser only read SKU → dropped lines
-  - FBA-only rows did not update forward-fill, so following SKUs attached to wrong FBA
-  - UI row_count was aggregated (fba,sku) unique pairs (75), not Excel detail lines
-  - No detail table in UI
+Change: remove shop/店铺 dimension entirely
+  - Allocation & cumulative merge keyed by SKU only (not shop+SKU)
+  - UI: no shop stats/columns/options; copy says 按 SKU 汇总，不区分店铺
+  - Exports: no 店铺 column
+  - Saihu parser no longer joins 货件信息 shops
+  - Each ticket result groups: ticket + matched FBAs + packing details
+  - Formula + step-by-step calc (①货件运费 ②SKU分摊 ③单件头程) after each ticket
+  - Cumulative view: tickets_grouped with packing + calc per ticket
 
-After fix (sample_saihu_sept.xlsx): detail=114 agg=86 fba=62 (was 75/56)
-After fix (sample_saihu_user.xlsx trimmed): detail=104 agg=76 fba=58 (was 75/56)
-
-Saihu step 2: full detail table (货件编号,总箱数,总重量,SKU,单箱数量,箱数,箱子重量) scrollable
-Step 3: per-ticket only — select 票 → enter unit packed weights for multi-SKU → 计算本票
-  Single-SKU: no unit weight required. Multi-SKU missing weight: blocked/skipped clearly.
-  No batch allocate-all.
-
-verify_sample.py: ALL PASS
+verify_sample.py: ALL PASS (LR-BB223≈33.24 / LR-BB232≈20.86; SKU-only)

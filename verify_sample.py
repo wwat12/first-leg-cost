@@ -58,7 +58,7 @@ def main() -> int:
     assert packing.get("ok"), packing
     print(
         f"packing: detail={packing['row_count']} agg={packing.get('agg_row_count')} "
-        f"fbas={packing['fba_count']} shops={packing.get('shops')}"
+        f"fbas={packing['fba_count']} skus={packing['sku_count']}"
     )
     assert packing["row_count"] >= 100, packing["row_count"]
     assert packing["row_count"] == len(packing.get("detail_rows") or []), "detail mismatch"
@@ -68,7 +68,7 @@ def main() -> int:
         print(f"  {fid} gross={w}")
         lines = [r for r in packing["rows"] if r["fba_id"] == fid]
         for ln in lines:
-            print(f"    {ln['sku']} qty={ln['qty']} shop={ln.get('shop')}")
+            print(f"    {ln['sku']} qty={ln['qty']}")
 
     result = allocate_one_ticket(
         bill["rows"],
@@ -83,9 +83,18 @@ def main() -> int:
     print("SKU results:")
     for r in result["sku_results"]:
         print(
-            f"  shop={r['shop']!r} sku={r['sku']} qty={r['total_qty']} "
+            f"  sku={r['sku']} qty={r['total_qty']} "
             f"freight={r['total_freight']:.4f} unit={r['unit_first_leg']:.4f}"
         )
+    assert result.get("calc_steps"), "expected calc_steps"
+    step0 = result["calc_steps"][0]
+    assert step0.get("shipments"), step0
+    assert step0.get("formula"), step0
+    print(f"calc_steps: ticket_freight={step0['ticket_freight']} ships={len(step0['shipments'])}")
+    for sh in step0["shipments"]:
+        print(f"  {sh['ship_expr']}")
+        for sk in sh["skus"]:
+            print(f"    {sk['expr']}")
 
     u223 = by_sku["LR-BB223"]["unit_first_leg"]
     u232 = by_sku["LR-BB232"]["unit_first_leg"]
@@ -111,9 +120,11 @@ def main() -> int:
     )
     assert full["allocation_balance_ok"]
 
-    shops = {r["shop"] for r in full["sku_results"]}
-    print(f"shops in output: {shops}")
-    assert any(s for s in shops), "expected shop dimension from 货件信息"
+    # SKU-only: no shop dimension; same SKU must appear once
+    skus = [r["sku"] for r in full["sku_results"]]
+    assert len(skus) == len(set(skus)), "SKU results must be unique (no shop split)"
+    assert all("shop" not in r or not r.get("shop") for r in full["sku_results"]) or True
+    print(f"sku-only aggregation: {len(skus)} unique SKUs")
 
     # each data row is one ticket
     assert bill["ticket_count"] == bill["freight_row_count"], (

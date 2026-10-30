@@ -23,12 +23,12 @@ def allocate_by_weight(
     upload). Missing ones are skipped (listed in multi_sku_missing_unit_weight /
     unmatched_freight); other tickets still allocate. Single-SKU needs no unit weight.
 
-    Output is keyed by (shop, sku). Shop comes from packing/shipment data when
-    present; otherwise the optional shop argument / blank.
+    Output is keyed by sku only (no shop dimension). Same SKU across shops/tickets
+    is aggregated together.
     """
     shipment_weights = dict(shipment_weights or {})
 
-    # Index SKU lines by FBA id; also capture shop + unit weight
+    # Index SKU lines by FBA id; capture unit weight
     skus_by_fba: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for s in shipment_skus:
         sku = str(s.get("sku") or "").strip()
@@ -39,7 +39,6 @@ def allocate_by_weight(
         if qty <= 0:
             continue
         unit_w = float(s.get("unit_weight") or 0)
-        line_shop = str(s.get("shop") or shop or "").strip()
         gw = float(s.get("shipment_gross_weight") or 0)
         if gw > 0 and fba not in shipment_weights:
             shipment_weights[fba] = gw
@@ -49,7 +48,6 @@ def allocate_by_weight(
                 "sku": sku,
                 "qty": qty,
                 "unit_weight": unit_w,
-                "shop": line_shop,
             }
         )
 
@@ -64,14 +62,11 @@ def allocate_by_weight(
                     "sku": ln["sku"],
                     "qty": 0.0,
                     "unit_weight": 0.0,
-                    "shop": ln["shop"],
                 },
             )
             m["qty"] += ln["qty"]
             if ln["unit_weight"] > 0 and m["unit_weight"] <= 0:
                 m["unit_weight"] = ln["unit_weight"]
-            if ln["shop"] and not m["shop"]:
-                m["shop"] = ln["shop"]
         skus_by_fba[fba] = list(merged.values())
         if fba not in shipment_weights or shipment_weights[fba] <= 0:
             # derive from unit weights if possible
@@ -117,8 +112,9 @@ def allocate_by_weight(
     blocked_multi_sku: set[str] = {m["fba_id"] for m in multi_sku_missing}
 
     shipment_allocs: list[dict[str, Any]] = []
-    # key: (shop, sku)
-    sku_costs: dict[tuple[str, str], dict[str, Any]] = {}
+    # key: sku
+    sku_costs: dict[str, dict[str, Any]] = {}
+    calc_steps: list[dict[str, Any]] = []
     unmatched_freight: list[dict] = []
     unmatched_fba: list[str] = []
     matched_fba: set[str] = set()
@@ -193,9 +189,24 @@ def allocate_by_weight(
 
         included_bill_freight += ticket_freight
 
+        step_ticket: dict[str, Any] = {
+            "ticket_id": ticket_id,
+            "ext_nos": ext_nos,
+            "ticket_freight": round(ticket_freight, 6),
+            "total_ship_weight": round(total_ship_w, 6),
+            "formula": {
+                "ship": "货件运费＝整票运费 × 该货件毛重 ÷ 本票货件毛重之和",
+                "sku_multi": "SKU分摊＝货件运费 ×（数量×单件含包装重量）÷ 货件内SKU总重之和",
+                "sku_single": "单SKU：货件运费全归该SKU",
+                "unit": "单件头程＝SKU分摊 ÷ 数量",
+            },
+            "shipments": [],
+            "sku_finalize": [],
+        }
+
         for fid in present:
             ship_freight = ticket_freight * (ship_w[fid] / total_ship_w)
-            _allocate_skus_in_shipment(
+            ship_step = _allocate_skus_in_shipment(
                 fid,
                 ship_freight,
                 skus_by_fba[fid],
@@ -205,20 +216,24 @@ def allocate_by_weight(
                 sku_costs,
                 ticket_label=ticket_label,
                 ext_nos=ext_nos,
+                ticket_freight=ticket_freight,
+                total_ship_weight=total_ship_w,
             )
+            step_ticket["shipments"].append(ship_step)
             matched_fba.add(fid)
 
         for fid in ticket_fba_ids:
             if fid not in present:
                 unmatched_fba.append(fid)
 
-    # ③ finalize unit cost per (shop, sku)
+        calc_steps.append(step_ticket)
+
+    # ③ finalize unit cost per sku
     sku_results = []
-    for (shop_key, sku), agg in sorted(sku_costs.items(), key=lambda x: (x[0][0], x[0][1])):
+    for sku, agg in sorted(sku_costs.items(), key=lambda x: x[0]):
         unit = agg["total_freight"] / agg["total_qty"] if agg["total_qty"] else 0
         sku_results.append(
             {
-                "shop": shop_key,
                 "sku": sku,
                 "total_freight": round(agg["total_freight"], 6),
                 "total_qty": agg["total_qty"],
@@ -228,12 +243,34 @@ def allocate_by_weight(
             }
         )
 
+    # Attach ③ finalize lines onto each ticket's calc_steps (SKUs touched by that ticket)
+    for step in calc_steps:
+        touched = {
+            a["sku"]
+            for a in shipment_allocs
+            if a.get("ticket_id") == step["ticket_id"]
+        }
+        step["sku_finalize"] = [
+            {
+                "sku": r["sku"],
+                "total_freight": r["total_freight"],
+                "total_qty": r["total_qty"],
+                "unit_first_leg": r["unit_first_leg"],
+                "expr": (
+                    f"{r['sku']}：单件头程＝{r['total_freight']:.4f} ÷ {r['total_qty']} "
+                    f"＝ {r['unit_first_leg']:.4f}"
+                ),
+            }
+            for r in sku_results
+            if r["sku"] in touched
+        ]
+
     total_allocated = round(sum(x["total_freight"] for x in sku_results), 4)
     return {
         "ok": True,
-        "shop": shop,
         "sku_results": sku_results,
         "shipment_allocs": shipment_allocs,
+        "calc_steps": calc_steps,
         "unmatched_freight": unmatched_freight,
         "unmatched_fba_on_bill": sorted(set(unmatched_fba)),
         "matched_fba_count": len(matched_fba),
@@ -255,30 +292,35 @@ def _allocate_skus_in_shipment(
     sku_costs: dict,
     ticket_label: str = "",
     ext_nos: str = "",
-) -> None:
+    ticket_freight: float = 0.0,
+    total_ship_weight: float = 0.0,
+) -> dict[str, Any]:
     """
     ② SKU分摊：单SKU → 全归该SKU；
        多SKU → 按 (数量×单件含包装重量) 比例分摊。
+    Returns a step dict for UI explanation.
     """
-    if len(sku_lines) == 1:
+    single = len(sku_lines) == 1
+    if single:
         shares = [(sku_lines[0], ship_freight, sku_lines[0]["qty"] * float(sku_lines[0].get("unit_weight") or 0))]
+        sku_weight_total = shares[0][2]
     else:
         weights = []
         for s in sku_lines:
             sw = float(s["qty"]) * float(s.get("unit_weight") or 0)
             weights.append(sw)
-        total_w = sum(weights)
+        sku_weight_total = sum(weights)
         shares = []
         for s, sw in zip(sku_lines, weights):
-            share = ship_freight * (sw / total_w) if total_w > 0 else 0.0
+            share = ship_freight * (sw / sku_weight_total) if sku_weight_total > 0 else 0.0
             shares.append((s, share, sw))
 
     label = ticket_label or ext_nos or ticket_id
+    sku_steps = []
     for s, share, sku_total_w in shares:
-        line_shop = s.get("shop") or ""
+        unit_partial = round(share / s["qty"], 6) if s["qty"] else 0
         shipment_allocs.append(
             {
-                "shop": line_shop,
                 "ticket_id": ticket_id,
                 "waybill_no": label,  # display/export label (ext / FBA), not 运单号
                 "ext_nos": ext_nos,
@@ -290,10 +332,10 @@ def _allocate_skus_in_shipment(
                 "alloc_weight": round(ship_gross_weight, 6),
                 "shipment_freight": round(ship_freight, 6),
                 "sku_freight": round(share, 6),
-                "unit_first_leg_partial": round(share / s["qty"], 6) if s["qty"] else 0,
+                "unit_first_leg_partial": unit_partial,
             }
         )
-        key = (line_shop, s["sku"])
+        key = s["sku"]
         agg = sku_costs.setdefault(
             key,
             {
@@ -308,6 +350,44 @@ def _allocate_skus_in_shipment(
         agg["shipment_count"] += 1
         agg["fba_ids"].add(fba_id)
 
+        uw = float(s.get("unit_weight") or 0)
+        if single:
+            expr = (
+                f"单SKU → 货件运费全归 {s['sku']}："
+                f"{ship_freight:.4f}；单件＝{ship_freight:.4f} ÷ {s['qty']} ＝ {unit_partial:.4f}"
+            )
+        else:
+            expr = (
+                f"{s['sku']}：{ship_freight:.4f} × ({s['qty']}×{uw}＝{sku_total_w:.4f})"
+                f" ÷ {sku_weight_total:.4f} ＝ {share:.4f}；"
+                f"单件＝{share:.4f} ÷ {s['qty']} ＝ {unit_partial:.4f}"
+            )
+        sku_steps.append(
+            {
+                "sku": s["sku"],
+                "qty": s["qty"],
+                "unit_weight": uw,
+                "sku_total_weight": round(sku_total_w, 6) if sku_total_w else 0,
+                "sku_freight": round(share, 6),
+                "unit_first_leg_partial": unit_partial,
+                "expr": expr,
+            }
+        )
+
+    ship_expr = (
+        f"货件运费＝{ticket_freight:.4f} × {ship_gross_weight:.4f} ÷ {total_ship_weight:.4f}"
+        f" ＝ {ship_freight:.4f}"
+    )
+    return {
+        "fba_id": fba_id,
+        "gross_weight": round(ship_gross_weight, 6),
+        "ship_freight": round(ship_freight, 6),
+        "single_sku": single,
+        "sku_weight_total": round(sku_weight_total, 6) if sku_weight_total else 0,
+        "ship_expr": ship_expr,
+        "skus": sku_steps,
+    }
+
 
 def freight_by_shipment_export_rows(freight_rows: list[dict], shop: str = "") -> list[dict]:
     """Flatten freight rows for CSV/XLSX download (no Saihu needed). G/K/R only."""
@@ -315,7 +395,6 @@ def freight_by_shipment_export_rows(freight_rows: list[dict], shop: str = "") ->
     for r in freight_rows:
         out.append(
             {
-                "店铺": shop or r.get("shop") or "",
                 "票标识": r.get("ticket_id") or "",
                 "扩展单号": r.get("ext_nos"),
                 "FBA货件号列表": ",".join(r.get("fba_ids") or []),

@@ -175,7 +175,6 @@ def suggest_mapping(columns: list[str]) -> dict[str, str | None]:
         "box_count": find(BOX_COUNT_ALIASES),
         "unit_weight": unit_w,
         "total_weight": total_w,
-        "shop": find(SHOP_ALIASES),
     }
 
 
@@ -278,7 +277,6 @@ def parse_packing(
         total_w_col = _find_col(headers, ["总重量"]) or _find_col(headers, TOTAL_WEIGHT_ALIASES)
         box_w_col = _find_col(headers, ["箱子重量(kg)", "箱子重量"])
         # Packing sheet does not supply unit packed weight; optional upload fills multi-SKU.
-        shop_col = _find_col(headers, SHOP_ALIASES)
 
         if not fba_col or (not sku_col and not msku_col):
             return {
@@ -292,8 +290,6 @@ def parse_packing(
                 "error": "装箱表缺少数量列（需要「单箱数量」或「数量」）",
                 "available_columns": list(headers.keys()),
             }
-
-        shop_by_fba = _load_shop_by_fba(wb)
 
         # Columns used from 装箱信息 (canonical Saihu packing export):
         # 货件编号, 总箱数, 总重量, SKU, 单箱数量, 箱数, 箱子重量(kg)
@@ -387,12 +383,6 @@ def parse_packing(
 
             row_unit_w = float(unit_weights[sku]) if sku in unit_weights else 0.0
 
-            shop = ""
-            if shop_col:
-                shop = _norm(ws.cell(r, headers[shop_col]).value)
-            if not shop:
-                shop = shop_by_fba.get(fba, "")
-
             detail_rows.append(
                 {
                     "excel_row": r,
@@ -405,7 +395,6 @@ def parse_packing(
                     "box_weight": box_w if raw_fba or raw_box_w > 0 else last_box_w,
                     "qty": qty,
                     "unit_weight": row_unit_w,
-                    "shop": shop,
                 }
             )
 
@@ -417,15 +406,12 @@ def parse_packing(
                     "sku": sku,
                     "qty": 0.0,
                     "unit_weight": 0.0,
-                    "shop": shop,
                     "row_count": 0,
                 },
             )
             agg["qty"] += qty
             if row_unit_w > 0 and agg["unit_weight"] <= 0:
                 agg["unit_weight"] = row_unit_w
-            if shop and not agg["shop"]:
-                agg["shop"] = shop
             agg["row_count"] += 1
 
         # Build shipment SKU rows with gross weight per FBA (for allocation)
@@ -440,7 +426,6 @@ def parse_packing(
                     "sku": agg["sku"],
                     "qty": agg["qty"],
                     "unit_weight": agg["unit_weight"],
-                    "shop": agg["shop"] or "",
                 }
             )
 
@@ -459,7 +444,6 @@ def parse_packing(
                 d["total_weight"] = shipment_weights.get(d["fba_id"], 0.0)
             d["shipment_gross_weight"] = shipment_weights.get(d["fba_id"], 0.0)
 
-        shops = sorted({r["shop"] for r in rows if r.get("shop")})
         return {
             "ok": True,
             "sheet": name,
@@ -468,7 +452,6 @@ def parse_packing(
             "agg_row_count": len(rows),
             "fba_count": len(skus_by_fba),
             "sku_count": len({r["sku"] for r in rows}),
-            "shops": shops,
             "shipment_weights": shipment_weights,
             "detail_rows": detail_rows,
             "rows": rows,
@@ -573,8 +556,6 @@ def parse_saihu(
             mapping.get("total_weight") == weight_col_name and not mapping.get("unit_weight")
         )
 
-        shop_by_fba = _load_shop_by_fba(wb)
-        shop_col_name = mapping.get("shop")
         rows = []
         for r in range(header_row + 1, (ws.max_row or header_row) + 1):
             fba = _norm(ws.cell(r, headers[mapping["fba_id"]]).value)
@@ -596,11 +577,6 @@ def parse_saihu(
             if unit_w <= 0 and sku in (unit_weights or {}):
                 unit_w = float(unit_weights[sku])
                 ship_w = unit_w * qty
-            shop = ""
-            if shop_col_name and shop_col_name in headers:
-                shop = _norm(ws.cell(r, headers[shop_col_name]).value)
-            if not shop:
-                shop = shop_by_fba.get(fba, "")
             rows.append(
                 {
                     "fba_id": fba,
@@ -608,7 +584,6 @@ def parse_saihu(
                     "qty": qty,
                     "unit_weight": unit_w,
                     "shipment_gross_weight": ship_w,  # may re-aggregate later
-                    "shop": shop,
                     "_weight_is_total_line": weight_is_total,
                 }
             )
@@ -634,11 +609,9 @@ def parse_saihu(
                         "qty": x["qty"],
                         "unit_weight": x["unit_weight"],
                         "shipment_gross_weight": gross,
-                        "shop": x["shop"],
                     }
                 )
 
-        shops = sorted({r["shop"] for r in out_rows if r.get("shop")})
         return {
             "ok": True,
             "sheet": name,
@@ -646,7 +619,6 @@ def parse_saihu(
             "row_count": len(out_rows),
             "fba_count": len(by_fba),
             "sku_count": len({x["sku"] for x in out_rows}),
-            "shops": shops,
             "shipment_weights": shipment_weights,
             "rows": out_rows,
             "source": "mapped",
