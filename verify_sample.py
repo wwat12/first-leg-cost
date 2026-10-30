@@ -62,6 +62,13 @@ def main() -> int:
     )
     assert packing["row_count"] >= 100, packing["row_count"]
     assert packing["row_count"] == len(packing.get("detail_rows") or []), "detail mismatch"
+    # sept full export: unique 货件编号 markers == usable fba (MSKU fallback fills blanks)
+    assert packing.get("fba_marker_count", packing["fba_count"]) == packing["fba_count"], (
+        packing.get("fba_marker_count"),
+        packing["fba_count"],
+        packing.get("fba_missing_sku"),
+    )
+    assert packing["fba_count"] >= 60, packing["fba_count"]
 
     for fid in fbas:
         w = packing["shipment_weights"].get(fid)

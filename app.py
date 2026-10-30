@@ -276,12 +276,16 @@ def upload_saihu():
         state["saihu"] = auto
         state.pop("saihu_peek", None)
         _save_state(state)
-        flash(
-            f"装箱信息解析成功：{auto['row_count']} 条明细"
-            f"（聚合 {auto.get('agg_row_count', auto['row_count'])} 个货件×SKU），"
-            f"{auto['fba_count']} 个货件，{auto['sku_count']} 个 SKU",
-            "ok",
+        markers = auto.get("fba_marker_count", auto["fba_count"])
+        missing = auto.get("fba_missing_sku") or []
+        msg = (
+            f"装箱信息解析成功：{auto['row_count']} 条明细行（主计数），"
+            f"{markers} 个去重货件编号，{auto['sku_count']} 个 SKU"
+            f"（可分摊货件 {auto['fba_count']}）"
         )
+        if missing:
+            msg += f"；{len(missing)} 个货件缺 SKU/MSKU 已跳过"
+        flash(msg, "ok")
         return redirect(url_for("index") + "#allocate")
 
     # Fallback: column mapper

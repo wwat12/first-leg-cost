@@ -130,6 +130,7 @@ body {
 }
 .mini-stats strong { font-size: 0.95rem; font-variant-numeric: tabular-nums; color: var(--primary); }
 .mini-stats span { font-size: 0.7rem; color: var(--muted); }
+.meta-count { margin: 6px 0 0; font-size: 0.72rem; color: var(--muted); line-height: 1.35; }
 
 .upload-empty { margin: 6px 0 0; color: var(--muted); font-size: 0.85rem; }
 .upload-extra { margin-top: 8px; font-size: 0.82rem; color: var(--muted); }

@@ -76,10 +76,11 @@
         </form>
         {% if saihu and (saihu.detail_rows or saihu.rows) %}
         <div class="mini-stats">
-          <div><strong>{{ saihu.fba_count }}</strong><span>货件</span></div>
+          <div><strong>{{ saihu.row_count }}</strong><span>明细行</span></div>
+          <div><strong>{{ saihu.fba_marker_count or saihu.fba_count }}</strong><span>去重货件</span></div>
           <div><strong>{{ saihu.sku_count }}</strong><span>SKU</span></div>
-          <div><strong>{{ saihu.row_count }}</strong><span>明细</span></div>
         </div>
+        <p class="hint tight meta-count">明细＝装箱表每一行（含续行）；货件＝「货件编号」去重，不是 Excel 总行数{% if saihu.fba_missing_sku %}；另有 {{ saihu.fba_missing_sku|length }} 个货件缺 SKU/MSKU 未进明细{% endif %}</p>
         {% else %}
         <p class="upload-empty">尚未上传装箱</p>
         {% endif %}
@@ -101,7 +102,7 @@
             <span class="check">✓</span>
             <div>
               <strong>可开始核对</strong>
-              <p>{{ bill.ticket_count }} 票 · {{ saihu.fba_count }} 货件</p>
+              <p>{{ bill.ticket_count }} 票 · {{ saihu.row_count }} 明细 · {{ saihu.fba_marker_count or saihu.fba_count }} 去重货件</p>
             </div>
           </div>
         {% else %}

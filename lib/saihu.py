@@ -231,7 +231,8 @@ def parse_packing(
 
     Every data row with a resolvable SKU is kept (forward-fill blanks on continuation
     rows). detail_rows = one entry per Excel SKU line; rows = aggregated (fba,sku)
-    for allocation. row_count matches len(detail_rows).
+    for allocation. row_count = len(detail_rows) (=明细). fba_marker_count = distinct
+    nonempty 货件编号 cells; fba_count = markers that have ≥1 SKU/MSKU line.
 
     qty = 单箱数量 × 箱数 (箱数 blank → forward-filled; still blank → 单箱数量 alone).
     shipment gross weight = 总重量 (once per FBA) or explicit 箱子重量(kg) rows.
@@ -300,6 +301,9 @@ def parse_packing(
         ship_box_w_sum: dict[str, float] = defaultdict(float)
         lines: dict[tuple[str, str], dict[str, Any]] = {}
         detail_rows: list[dict[str, Any]] = []
+        # Unique raw nonempty 货件编号 (Excel markers), even if SKU blank
+        fba_markers: list[str] = []
+        fba_marker_set: set[str] = set()
 
         last_fba = ""
         last_total_boxes = 0.0
@@ -328,6 +332,9 @@ def parse_packing(
             # New shipment marker even when SKU cell blank: update carry so following
             # continuation / MSKU rows attach to the correct FBA.
             if raw_fba:
+                if raw_fba not in fba_marker_set:
+                    fba_marker_set.add(raw_fba)
+                    fba_markers.append(raw_fba)
                 last_fba = raw_fba
                 last_total_boxes = raw_total_boxes if raw_total_boxes > 0 else 0.0
                 last_total_w = raw_total_w if raw_total_w > 0 else 0.0
@@ -444,13 +451,21 @@ def parse_packing(
                 d["total_weight"] = shipment_weights.get(d["fba_id"], 0.0)
             d["shipment_gross_weight"] = shipment_weights.get(d["fba_id"], 0.0)
 
+        usable_fbas = set(skus_by_fba.keys())
+        missing_sku_fbas = [f for f in fba_markers if f not in usable_fbas]
         return {
             "ok": True,
             "sheet": name,
             "header_row": header_row,
+            # 明细 = Excel SKU lines kept after forward-fill
             "row_count": len(detail_rows),
             "agg_row_count": len(rows),
+            # 货件 = unique 货件编号 markers in sheet (raw nonempty cells, deduped)
+            "fba_marker_count": len(fba_markers),
+            "fba_marker_nonempty_cells": len(fba_markers),  # same when no dup markers
+            # usable for allocation (have ≥1 SKU/MSKU line)
             "fba_count": len(skus_by_fba),
+            "fba_missing_sku": missing_sku_fbas,
             "sku_count": len({r["sku"] for r in rows}),
             "shipment_weights": shipment_weights,
             "detail_rows": detail_rows,
