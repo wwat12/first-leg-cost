@@ -5,10 +5,16 @@ Service ID: srv-dbi33ih42hec73cai940
 Dashboard: https://dashboard.render.com/web/srv-dbi33ih42hec73cai940
 Region: singapore | Plan: free | Runtime: python
 Repo: https://github.com/wwat12/first-leg-cost (branch main)
-Deploy: dep-dbi33j942hec73caiap0 status=live (Asia/Shanghai ~2026-10-30 13:58)
+Deploy: dep-dbi4vvtg1s2s73e139ag status=live (Asia/Shanghai ~2026-10-30 16:07)
+Commit: 164ef53 Bill parse: merge all detail sheets; stop filtering by 费用类型
 
-Verify: PASS — POST /upload_bill sample_bill.xlsx → total_freight=36095.4
-  API /api/bill_summary: {"ok":true,"total_freight":36095.4,"freight_row_count":38,"ticket_count":38}
+Verify: PASS — POST /upload_bill sample_bill_user.xlsx
+  → total_freight=438669.61 freight_row_count=474 ticket_count=308
+  sheets: 26.7 + 26.8 + 26.9 + 26.4 + 26.5 + 26.6
+  NOTE: sample still contains 清关费/税金/报关费/仓储费1 (166 non-运费 rows, ¥83858.51);
+        运费-only subset would be 308 rows / ¥354811.10. User will strip those before upload.
+
+No 物流报价表 / rate-card feature in app (allocation is bill freight only).
 
 Free-tier caveats:
   - Spins down after ~15 min idle; next request cold-starts ~30–60s (sometimes longer).
