@@ -2,15 +2,13 @@ STATUS: LIVE
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Deploy: (pending push) Asia/Shanghai 2026-10-30 ~17:30
+Deploy: dep-dbi65es9v7es738qgg0g status=live (Asia/Shanghai 2026-10-30 17:27)
+Commit: 358e459 Remove shop dimension; SKU-only aggregate; ticket calc steps
 
-Change: remove shop/店铺 dimension entirely
-  - Allocation & cumulative merge keyed by SKU only (not shop+SKU)
-  - UI: no shop stats/columns/options; copy says 按 SKU 汇总，不区分店铺
-  - Exports: no 店铺 column
-  - Saihu parser no longer joins 货件信息 shops
-  - Each ticket result groups: ticket + matched FBAs + packing details
-  - Formula + step-by-step calc (①货件运费 ②SKU分摊 ③单件头程) after each ticket
-  - Cumulative view: tickets_grouped with packing + calc per ticket
+Change:
+  - No shop/店铺 in UI, exports, Saihu join, or allocation keys — SKU only
+  - Each ticket grouped with matched FBAs + packing details for verification
+  - Formula + step-by-step ①货件运费 ②SKU分摊 ③单件头程 after each ticket result
+  - Cumulative: tickets_grouped with packing + calc per ticket
 
-verify_sample.py: ALL PASS (LR-BB223≈33.24 / LR-BB232≈20.86; SKU-only)
+verify_sample.py: ALL PASS
