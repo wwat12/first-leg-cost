@@ -143,10 +143,21 @@ def upload_bill():
         flash(f"解析账单失败: {e}", "error")
         return redirect(url_for("index"))
     if not result.get("rows"):
-        flash("未解析到账单明细行，请确认文件含明细表（已跳过汇总表）", "error")
+        flash("未解析到账单明细行，请确认文件含已整理的明细表（已跳过汇总表）", "error")
     else:
+        sheets = result.get("sheets") or []
+        sheet_label = "、".join(sheets) if sheets else (result.get("sheet") or "未知")
+        mode = result.get("sheet_select") or ""
+        mode_hint = {
+            "cleaned": "已整理表头",
+            "detail": "明细表头",
+            "explicit": "指定工作表",
+            "all": "全部工作表",
+        }.get(mode, mode)
         flash(
-            f"账单解析成功：运费合计 ¥{result['total_freight']:.2f}，"
+            f"账单解析成功：使用工作表「{sheet_label}」"
+            + (f"（{mode_hint}）" if mode_hint else "")
+            + f"；运费合计 ¥{result['total_freight']:.2f}，"
             f"{result['freight_row_count']} 行 / {result['ticket_count']} 票"
             "（货件号取自 G列扩展单号）",
             "ok",

@@ -43,7 +43,7 @@
         <li><strong>SKU 分摊</strong>＝货件运费 ×（发货数量×单件含包装重量）÷ 货件内 SKU 总重之和。货件内仅 1 个 SKU 时，运费全归该 SKU</li>
         <li><strong>单件头程</strong>＝SKU 分摊 ÷ 数量；同 SKU 多货件时用合计分摊 ÷ 合计数量</li>
       </ol>
-      <p class="hint tight">账单按<strong>运单号</strong>成票（上传前请自行删掉税金/清关费行；网站不筛选费用类型）。货件取自账单 G 列<strong>扩展单号</strong>中的 FBA…，与赛狐<strong>装箱信息·货件编号</strong>对应。重量单位 kg；有店铺列时按店铺+SKU 汇总。</p>
+      <p class="hint tight">账单按<strong>运单号</strong>成票（上传前请自行删掉税金/清关费行，并尽量只保留当前已整理的那张明细表；网站默认只读已整理表头的工作表，不筛选费用类型）。货件取自账单 G 列<strong>扩展单号</strong>中的 FBA…，与赛狐<strong>装箱信息·货件编号</strong>对应。重量单位 kg；有店铺列时按店铺+SKU 汇总。</p>
     </details>
 
     <section class="card" id="bill">
@@ -51,7 +51,7 @@
         <span class="step">1</span>
         <div>
           <h2>上传物流账单</h2>
-          <p class="hint tight">美通风格对账单 .xlsx。自动合并全部明细表、跳过「汇总」。金额用「折合人民币」；货件号以 G 列扩展单号为准。</p>
+          <p class="hint tight">美通风格对账单 .xlsx。默认只读<strong>已整理</strong>的工作表（首行表头含「序号」或「运单号」）；若有多张已整理表则合并；都没有则回退合并其他明细表。跳过「汇总」。金额用「折合人民币」；货件号以 G 列扩展单号为准。</p>
         </div>
       </div>
       <form method="post" action="{{ url_for('upload_bill') }}" enctype="multipart/form-data" class="upload-box">
@@ -71,7 +71,18 @@
         <div class="stat"><div class="num">{{ bill.freight_row_count }}</div><div class="lbl">明细行</div></div>
         <div class="stat"><div class="num">{{ '%.1f'|format(bill.total_weight) }}</div><div class="lbl">收费重 kg</div></div>
       </div>
-      <p class="meta">明细表 <code>{{ bill.sheet }}</code> · 表头行 {{ bill.header_row }}</p>
+      <p class="meta">使用工作表
+        {% if bill.sheets %}
+          {% for s in bill.sheets %}<code>{{ s }}</code>{% if not loop.last %}、{% endif %}{% endfor %}
+        {% else %}
+          <code>{{ bill.sheet }}</code>
+        {% endif %}
+        {% if bill.sheet_select == 'cleaned' %}（已整理表头）
+        {% elif bill.sheet_select == 'detail' %}（未整理，回退明细表）
+        {% elif bill.sheet_select == 'explicit' %}（指定）
+        {% endif %}
+        · 表头行 {{ bill.header_row }}
+      </p>
       <div class="table-wrap">
         <table>
           <thead>

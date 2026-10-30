@@ -1,20 +1,17 @@
-STATUS: LIVE
+STATUS: DEPLOYING
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Deploy: dep-dbi53njtu7ds73c13m60 status=live (Asia/Shanghai 2026-10-30 16:15)
-Commit: 26e4586 UI polish + bill multi-sheet / no fee filter
+Pending deploy after push (Asia/Shanghai 2026-10-30 16:23)
 
 Bill parse changes:
-  - Merge ALL detail sheets; skip 汇总
-  - No 费用类型 filter (user deletes 税金/清关费 before upload)
-  - No 物流报价表 anywhere; monthly flow = bill + Saihu only
+  - Prefer cleaned sheet(s) only: row1 starts with 序号 or contains 运单号
+  - If exactly one cleaned → use only that; if multiple → merge cleaned only
+  - Never auto-merge other month tabs when a cleaned sheet exists
+  - Fallback only when NO cleaned sheets: previous detail-header merge
+  - UI + flash show which sheet(s) were used
 
-sample_bill_user.xlsx (file still has non-freight rows):
-  tickets=308  rows=474  total_freight=¥438669.61  weight=35934.14 kg
-  sheets: 26.7 + 26.8 + 26.9 + 26.4 + 26.5 + 26.6
-  of which 运费-only: 308 rows / ¥354811.10
-  non-运费 still in file: 清关费×94 + 税金×70 + 报关费×1 + 仓储费1×1 = ¥83858.51
+attachment 01M65YAJ…xlsx / sample_bill_user.xlsx:
+  tickets=84  rows=84  total_freight=¥81516.90  sheets=['26.9'] select=cleaned
 
 verify_sample.py: ALL PASS
-Live upload verify: PASS (same totals)

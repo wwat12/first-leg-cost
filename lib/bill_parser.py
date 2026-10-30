@@ -144,45 +144,103 @@ def _is_junk_waybill(waybill: str) -> bool:
     return False
 
 
+def _first_row_vals(ws, max_col: int = 25) -> list[str]:
+    """Return normalized values from the first worksheet row."""
+    for row in ws.iter_rows(min_row=1, max_row=1, max_col=max_col, values_only=True):
+        return [_norm(v) for v in row]
+    return []
+
+
+def _is_cleaned_header_row(vals: list[str]) -> bool:
+    """True when row 1 already looks like column headers (user-cleaned sheet).
+
+    Cleaned sheets start with 序号 or have 运单号 in the first row.
+    Raw Meitong exports start with a company title (合肥美通…) instead.
+    """
+    if not vals:
+        return False
+    first = vals[0] if vals else ""
+    if first == "序号":
+        return True
+    if "运单号" in vals:
+        return True
+    return False
+
+
+def _sheet_has_detail_headers(ws) -> bool:
+    """True if 运单号 + 费用类型 appear anywhere in the first 40 rows."""
+    for row in ws.iter_rows(max_row=40, max_col=25, values_only=True):
+        vals = [_norm(v) for v in row]
+        if "运单号" in vals and "费用类型" in vals:
+            return True
+    return False
+
+
 def detect_detail_sheets(path: str) -> list[str]:
+    """Prefer cleaned sheets (row-1 headers); else all sheets with detail headers."""
     wb = load_workbook(path, data_only=True, read_only=True)
     try:
-        names = []
+        cleaned: list[str] = []
+        detail: list[str] = []
         for name in wb.sheetnames:
             if "汇总" in name or "summary" in name.lower():
                 continue
             ws = wb[name]
-            found = False
-            for i, row in enumerate(ws.iter_rows(max_row=40, max_col=25, values_only=True)):
-                vals = [_norm(v) for v in row]
-                if "运单号" in vals and "费用类型" in vals:
-                    found = True
-                    break
-            if found:
-                names.append(name)
-        return names
+            if _is_cleaned_header_row(_first_row_vals(ws)):
+                cleaned.append(name)
+            elif _sheet_has_detail_headers(ws):
+                detail.append(name)
+        return cleaned if cleaned else detail
     finally:
         wb.close()
 
 
-def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict[str, Any]:
-    """Parse a Meitong-style bill. Merges all detail sheets; no fee-type filter.
+def _select_sheets(wb, sheet_name: str | None = None) -> tuple[list[str], str]:
+    """Pick which sheets to parse.
 
-    User is expected to delete 税金/清关费 rows before upload. Every remaining
-    data row is treated as bill cost (freight) for allocation.
+    Preference:
+      1. Explicit sheet_name if provided
+      2. Sheets whose first row is already cleaned column headers (序号 / 运单号)
+         — if any, use only those (single or merge multiple cleaned)
+      3. Fallback: all non-汇总 sheets that contain detail headers anywhere
+    """
+    if sheet_name and sheet_name in wb.sheetnames:
+        return [sheet_name], "explicit"
+
+    candidates = [
+        n
+        for n in wb.sheetnames
+        if "汇总" not in n and "summary" not in n.lower()
+    ]
+    if not candidates:
+        candidates = list(wb.sheetnames)
+
+    cleaned: list[str] = []
+    detail: list[str] = []
+    for name in candidates:
+        ws = wb[name]
+        if _is_cleaned_header_row(_first_row_vals(ws)):
+            cleaned.append(name)
+        elif _find_header_row(ws):
+            detail.append(name)
+
+    if cleaned:
+        return cleaned, "cleaned"
+    if detail:
+        return detail, "detail"
+    return candidates, "all"
+
+
+def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict[str, Any]:
+    """Parse a Meitong-style bill. Prefer user-cleaned sheet(s); no fee-type filter.
+
+    User is expected to delete 税金/清关费 rows and leave only the cleaned
+    detail sheet before upload. Every remaining data row is treated as bill
+    cost (freight) for allocation.
     """
     wb = load_workbook(path, data_only=True)
     try:
-        if sheet_name and sheet_name in wb.sheetnames:
-            sheets = [sheet_name]
-        else:
-            sheets = [
-                n
-                for n in wb.sheetnames
-                if "汇总" not in n and "summary" not in n.lower()
-            ]
-            if not sheets:
-                sheets = list(wb.sheetnames)
+        sheets, sheet_select = _select_sheets(wb, sheet_name)
 
         all_rows: list[FreightRow] = []
         used_sheets: list[str] = []
@@ -308,6 +366,7 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
             "ok": True,
             "sheet": sheet_label,
             "sheets": used_sheets,
+            "sheet_select": sheet_select,
             "header_row": header_row,
             "header_rows": header_rows,
             "shop": shop,
