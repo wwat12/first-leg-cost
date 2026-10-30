@@ -10,7 +10,7 @@
   <header class="top">
     <div class="wrap">
       <h1>FBA 头程运费分摊</h1>
-      <p class="sub">账单运费 × 装箱实际毛重 → 货件运费 → SKU 分摊 → 单件头程（含 LR，按店铺分别计算）</p>
+      <p class="sub">每月仅两份文件：物流账单 + 赛狐装箱/货件导出。按账单实际运费与装箱毛重分摊到 SKU 单件头程（含 LR，按店铺分别计算）。不用物流报价表。</p>
     </div>
   </header>
 
@@ -32,7 +32,7 @@
         <li><strong>SKU 分摊</strong>：SKU总重量＝发货数量×单件含包装重量；SKU分摊＝货件运费×SKU总重÷货件内SKU总重之和。<strong>货件内仅 1 个 SKU 时，货件运费全归该 SKU</strong>（无需单件重量）</li>
         <li><strong>单件头程</strong>＝SKU分摊÷数量；同一 SKU 出现在多个货件时：合计分摊÷合计数量</li>
       </ol>
-      <p class="hint">匹配规则：账单按<strong>运单号</strong>成票（上传前请自行删掉税金/清关费等非运费行；网站不再按费用类型筛选）；货件列表取自 <strong>G 列「扩展单号」</strong>中的 FBA… 号，与赛狐<strong>装箱信息</strong>的<strong>货件编号</strong>对应。重量单位 kg。不同店铺分别计算（有店铺列时按店铺+SKU 汇总）。</p>
+      <p class="hint">每月流程：①物流账单 ②赛狐装箱信息 → 执行分摊。运费只来自账单实付金额（不用物流报价表）。账单按<strong>运单号</strong>成票（上传前请自行删掉税金/清关费等非运费行；网站不按费用类型筛选）；货件列表取自 <strong>G 列「扩展单号」</strong>中的 FBA… 号，与赛狐<strong>装箱信息</strong>的<strong>货件编号</strong>对应。重量单位 kg。不同店铺分别计算（有店铺列时按店铺+SKU 汇总）。</p>
     </section>
 
     <section class="card" id="bill">
@@ -112,8 +112,8 @@
         </div>
       </form>
 
-      <h3 style="margin-top:1.25rem;font-size:1rem">（可选）单件含包装重量表</h3>
-      <p class="hint">仅当<strong>同一货件内有多个 SKU</strong>时需要，用于按「数量×单件重量」分摊。单 SKU 货件不需要。列：SKU + 单件含包装重量(kg)。</p>
+      <h3 style="margin-top:1.25rem;font-size:1rem">（非每月必传）多 SKU 货件用的单件含包装重量</h3>
+      <p class="hint">不是第三份月度文件。仅当<strong>同一货件内有多个 SKU</strong>且赛狐未带单件重量时，才需补传一次，用于按「数量×单件重量」分摊。单 SKU 货件不需要。列：SKU + 单件含包装重量(kg)。</p>
       <form method="post" action="{{ url_for('upload_unit_weights') }}" enctype="multipart/form-data">
         <div class="row">
           <label>单件重量表 (.xlsx)</label>
@@ -220,6 +220,7 @@
 
     <section class="card" id="allocate">
       <h2>③ 执行分摊 → SKU 单件头程</h2>
+      <p class="hint">用①账单运费与②装箱实际毛重计算；结果为各店铺 SKU 单件头程。不涉及物流报价表。</p>
       {% if alloc_error %}
         <div class="flash error">{{ alloc_error }}</div>
       {% endif %}
