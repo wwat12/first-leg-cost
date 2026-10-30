@@ -189,6 +189,24 @@ def allocate_by_weight(
 
         included_bill_freight += ticket_freight
 
+        # Collect filled inputs used for this ticket (for UI核对)
+        unit_inputs: list[dict[str, Any]] = []
+        ship_inputs: list[dict[str, Any]] = []
+        for fid in present:
+            ship_inputs.append({"fba_id": fid, "gross_weight": round(ship_w[fid], 6)})
+            sku_lines_here = skus_by_fba.get(fid) or []
+            if len(sku_lines_here) > 1:
+                for ln in sku_lines_here:
+                    uw = float(ln.get("unit_weight") or 0)
+                    unit_inputs.append(
+                        {
+                            "fba_id": fid,
+                            "sku": ln["sku"],
+                            "qty": ln["qty"],
+                            "unit_weight": uw,
+                        }
+                    )
+        chargeable_w = sum(float(x.get("chargeable_weight") or 0) for x in lines)
         step_ticket: dict[str, Any] = {
             "ticket_id": ticket_id,
             "ext_nos": ext_nos,
@@ -199,6 +217,12 @@ def allocate_by_weight(
                 "sku_multi": "SKU分摊＝货件运费 ×（数量×单件含包装重量）÷ 货件内SKU总重之和",
                 "sku_single": "单SKU：货件运费全归该SKU",
                 "unit": "单件头程＝SKU分摊 ÷ 数量",
+            },
+            "inputs": {
+                "ticket_freight": round(ticket_freight, 6),
+                "chargeable_weight": round(chargeable_w, 6),
+                "shipments": ship_inputs,
+                "unit_weights": unit_inputs,
             },
             "shipments": [],
             "sku_finalize": [],
