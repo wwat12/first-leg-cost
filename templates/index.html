@@ -287,48 +287,67 @@
         <div class="flash error">{{ alloc_error }}</div>
       {% endif %}
 
-      {% if not bill or not saihu %}
-        <p class="meta empty-hint">请先完成步骤 1（账单）与步骤 2（装箱）</p>
-      {% else %}
-
-      {# --- 票列表 --- #}
+      {# --- 票列表工作台：始终可见（空状态也可） --- #}
       <div class="workbench">
         <div class="wb-side">
           <div class="wb-side-head">
             <strong>账单票列表</strong>
-            {% if ticket_allocs %}
-              <span class="progress-pill">已算 {{ ticket_allocs|length }} / {{ bill.ticket_count }}</span>
+            {% if bill and bill.tickets %}
+              {% if ticket_allocs %}
+                <span class="progress-pill">已算 {{ ticket_allocs|length }} / {{ bill.ticket_count }}</span>
+              {% else %}
+                <span class="progress-pill muted">共 {{ bill.ticket_count }} 票</span>
+              {% endif %}
             {% else %}
-              <span class="progress-pill muted">共 {{ bill.ticket_count }} 票</span>
+              <span class="progress-pill muted">待上传账单</span>
             {% endif %}
           </div>
           <div class="ticket-list">
-            {% for t in bill.tickets or [] %}
-              {% set done = ticket_allocs and (t.ticket_id in ticket_allocs) %}
-              <form method="post" action="{{ url_for('select_ticket') }}" class="ticket-item {% if selected_ticket_id == t.ticket_id %}active{% endif %} {% if done %}done{% endif %}">
-                <input type="hidden" name="ticket_id" value="{{ t.ticket_id }}" />
-                <button type="submit" class="ticket-btn">
-                  <span class="t-idx">{{ loop.index }}</span>
-                  <span class="t-body">
-                    <span class="t-amt">¥{{ '%.2f'|format(t.freight_total) }}</span>
-                    <span class="t-meta">{{ '%.1f'|format(t.weight_total) }} kg · {{ (t.fba_ids or [])|length }} 货件</span>
-                    <span class="t-ext">{{ t.ext_nos or t.ticket_id }}</span>
-                  </span>
-                  {% if done %}
-                    <span class="tag ok">已算</span>
-                  {% elif selected_ticket_id == t.ticket_id %}
-                    <span class="tag sel">核对中</span>
-                  {% else %}
-                    <span class="tag idle">未算</span>
-                  {% endif %}
-                </button>
-              </form>
-            {% endfor %}
+            {% if bill and bill.tickets %}
+              {% for t in bill.tickets or [] %}
+                {% set done = ticket_allocs and (t.ticket_id in ticket_allocs) %}
+                <form method="post" action="{{ url_for('select_ticket') }}" class="ticket-item {% if selected_ticket_id == t.ticket_id %}active{% endif %} {% if done %}done{% endif %}">
+                  <input type="hidden" name="ticket_id" value="{{ t.ticket_id }}" />
+                  <button type="submit" class="ticket-btn">
+                    <span class="t-idx">{{ loop.index }}</span>
+                    <span class="t-body">
+                      <span class="t-amt">¥{{ '%.2f'|format(t.freight_total) }}</span>
+                      <span class="t-meta">{{ '%.1f'|format(t.weight_total) }} kg · {{ (t.fba_ids or [])|length }} 货件</span>
+                      <span class="t-ext">{{ t.ext_nos or t.ticket_id }}</span>
+                    </span>
+                    {% if done %}
+                      <span class="tag ok">已算</span>
+                    {% elif selected_ticket_id == t.ticket_id %}
+                      <span class="tag sel">核对中</span>
+                    {% else %}
+                      <span class="tag idle">未算</span>
+                    {% endif %}
+                  </button>
+                </form>
+              {% endfor %}
+            {% else %}
+              <div class="list-empty">
+                <p>上传步骤 1 账单后，票列表会出现在这里</p>
+              </div>
+            {% endif %}
           </div>
         </div>
 
         <div class="wb-main">
-          {% if ticket_preview and ticket_preview.ok %}
+          {% if not bill or not saihu %}
+          <div class="panel-empty">
+            {% if not bill and not saihu %}
+              <p>请先完成步骤 1（账单）与步骤 2（装箱）</p>
+              <p class="hint tight">完成后左侧选票，右侧核对装箱并计算</p>
+            {% elif not bill %}
+              <p>请先完成步骤 1（上传账单）</p>
+              <p class="hint tight">上传后左侧会出现票列表</p>
+            {% else %}
+              <p>请先完成步骤 2（上传装箱）</p>
+              <p class="hint tight">上传后即可从左侧选票核对计算</p>
+            {% endif %}
+          </div>
+          {% elif ticket_preview and ticket_preview.ok %}
           <div class="ticket-panel" id="ticket-check">
             <div class="panel-banner">
               <div>
@@ -414,7 +433,6 @@
           {% endif %}
         </div>
       </div>
-      {% endif %}
 
       {# --- 本票结果 --- #}
       {% set result = current_ticket_result %}

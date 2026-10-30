@@ -584,6 +584,18 @@ code {
   color: var(--muted);
 }
 
+.list-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.panel-empty .hint {
+  margin-top: 8px;
+}
+
 .ticket-panel {
   border: 1px solid var(--border);
   border-radius: 12px;
