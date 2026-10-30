@@ -2,13 +2,13 @@ STATUS: LIVE
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Deploy: dep-dbi65es9v7es738qgg0g status=live (Asia/Shanghai 2026-10-30 17:27)
-Commit: 358e459 Remove shop dimension; SKU-only aggregate; ticket calc steps
+Deploy: dep-dbi68ak9v7es738qnkl0 status=live (Asia/Shanghai 2026-10-30 17:33)
+Commit: bd10361 UI redesign: ticket-by-ticket workbench with filled inputs
 
 Change:
-  - No shop/店铺 in UI, exports, Saihu join, or allocation keys — SKU only
-  - Each ticket grouped with matched FBAs + packing details for verification
-  - Formula + step-by-step ①货件运费 ②SKU分摊 ③单件头程 after each ticket result
-  - Cumulative: tickets_grouped with packing + calc per ticket
+  - Major UI: left ticket list (一行一行) + right 本票核对 workbench
+  - Bill G/K/R + packing 7-col full detail table; no shop
+  - Multi-SKU unit-weight form → 计算本票 only
+  - Result: 公式 · 本次输入 · 逐步计算 (calc_steps.inputs)
 
 verify_sample.py: ALL PASS
