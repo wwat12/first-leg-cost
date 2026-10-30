@@ -2,16 +2,14 @@ STATUS: LIVE
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Deploy: dep-dbi5ckc9v7es738ofq5g status=live (Asia/Shanghai 2026-10-30 16:34)
-Commit: 3ca234c Bill preview/tickets: drop 运单号; each row is a ticket via G/K/R
+Deploy: dep-dbi5tjafngtc73ccuqv0 status=live (Asia/Shanghai 2026-10-30 17:10)
+Commit: 6527818 Saihu packing: only 7 装箱信息 cols with forward-fill
 
-Bill parse:
-  - Prefer cleaned sheet(s) only (row1 headers); never merge other month tabs with cleaned
-  - Allocation / preview columns ONLY: G 扩展单号 (FBA), K 收费重, R 金额 (CNY)
-  - 运单号 removed from bill preview; not used for ticket grouping or allocation
-  - Tickets = each data row keyed by 扩展单号+金额+收费重 (+ row index)
+Saihu 装箱信息 (step 2):
+  - Columns: 货件编号, 总箱数, 总重量, SKU, 单箱数量, 箱数, 箱子重量(kg)
+  - Continuation SKU rows: forward-fill 货件编号/总箱数/总重量/箱数/箱子重量
+  - Qty = 单箱数量×箱数; shipment gross = 总重量 or 箱子重量 (no double-count)
+  - Unit packed weight: optional upload only (multi-SKU); missing → skip those tickets
 
-attachment / sample_bill_user:
-  tickets=84  rows=84  total_freight=¥81516.90  sheets=['26.9'] select=cleaned
-
+User sample attachment: rows=75 fbas=56 (was 56/56 when continuation SKUs skipped)
 verify_sample.py: ALL PASS
