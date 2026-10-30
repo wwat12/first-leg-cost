@@ -2,10 +2,11 @@
 """Amazon FBA 头程运费分摊 MVP — Flask app."""
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import (
@@ -33,8 +34,61 @@ UPLOADS.mkdir(exist_ok=True)
 EXPORTS.mkdir(exist_ok=True)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET", "first-leg-cost-dev-key")
+app.secret_key = (
+    os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET") or "first-leg-cost-dev-key"
+)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64MB
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+if os.environ.get("RENDER"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+
+
+# ---------- 团队访问密码 ----------
+def _access_password() -> str:
+    return os.environ.get("ACCESS_PASSWORD", "")
+
+
+_OPEN_ENDPOINTS = {"login", "static"}
+
+
+@app.before_request
+def _require_login():
+    if not _access_password():
+        return None
+    if request.endpoint in _OPEN_ENDPOINTS:
+        return None
+    if session.get("authed"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    return redirect(url_for("login", next=request.path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    pwd = _access_password()
+    if not pwd:
+        return redirect(url_for("index"))
+    error = None
+    if request.method == "POST":
+        given = request.form.get("password") or ""
+        if hmac.compare_digest(given.encode("utf-8"), pwd.encode("utf-8")):
+            session.permanent = True
+            session["authed"] = True
+            nxt = request.args.get("next") or ""
+            if not nxt.startswith("/") or nxt.startswith("//"):
+                nxt = url_for("index")
+            return redirect(nxt)
+        error = "密码错误"
+    return render_template("login.html", error=error), (401 if error else 200)
+
+
+@app.route("/logout")
+def logout():
+    session.pop("authed", None)
+    return redirect(url_for("login"))
 
 
 def _sid() -> str:
@@ -374,7 +428,11 @@ def reset():
             p.unlink()
         except OSError:
             pass
+    authed = session.get("authed")
     session.clear()
+    if authed:
+        session.permanent = True
+        session["authed"] = True
     flash("已清空会话数据", "ok")
     return redirect(url_for("index"))
 

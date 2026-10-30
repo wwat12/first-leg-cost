@@ -10,7 +10,8 @@
   <header class="top">
     <div class="wrap">
       <h1>FBA 头程运费分摊 <span class="badge">MVP</span></h1>
-      <p class="sub">上传物流账单 → 按计费重分摊运费 →（可选）赛狐货件匹配 → SKU 单件头程</p>
+      <p class="sub">上传物流账单 → 按计费重分摊运费 →（可选）赛狐货件匹配 → SKU 单件头程
+        {% if session.get('authed') %}<a href="{{ url_for('logout') }}" style="color:#fff;opacity:.8;margin-left:12px;font-size:.85rem;">退出登录</a>{% endif %}</p>
     </div>
   </header>
 

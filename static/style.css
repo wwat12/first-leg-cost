@@ -123,3 +123,4 @@ td.small, .small { font-size: 0.78rem; color: var(--muted); word-break: break-al
 code { background: #eef1f6; padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
 details { margin-top: 12px; }
 summary { cursor: pointer; color: var(--primary); font-weight: 600; }
+.login-card { max-width: 420px; margin: 40px auto; }

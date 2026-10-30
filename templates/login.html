@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 · FBA 头程运费分摊</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <h1>FBA 头程运费分摊 <span class="badge">MVP</span></h1>
+      <p class="sub">团队内部工具，请先输入访问密码</p>
+    </div>
+  </header>
+  <main class="wrap">
+    <section class="card login-card">
+      <h2>请输入团队访问密码</h2>
+      {% if error %}<div class="flashes"><div class="flash error">{{ error }}</div></div>{% endif %}
+      <form method="post">
+        <div class="row">
+          <label for="password">访问密码</label>
+          <input type="password" id="password" name="password" autofocus required autocomplete="current-password" />
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn primary">进入</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

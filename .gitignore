@@ -9,3 +9,4 @@ logs/
 *.log
 .DS_Store
 .env
+RENDER_DEVICE_CODE.txt
