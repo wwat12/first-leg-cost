@@ -1,11 +1,18 @@
-STATUS: DEPLOYING
+STATUS: LIVE
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Commit: (pending push) mockup layout rebuild
+Deploy: dep-dbi6c2ijnfac73cuq89g status=live (Asia/Shanghai 2026-10-30 17:42)
+Commit: 35341ad UI: rebuild to match mockup workbench layout
 
 Change:
-  - Rebuild UI to match mockup: top side-by-side uploads, left ticket list ALWAYS visible, right packing + unit weight + calc + 过程
-  - Empty states for list/panel when uploads missing
-  - Compact bill/saihu stats in upload cards (no long stacked step cards)
+  - Top: side-by-side uploads (账单 | 装箱) + status
+  - Left: 票次列表 always visible (empty OK)
+  - Right: packing + unit weight + 计算本票 + 计算过程
+  - Matches mockup dashboard layout (not stacked step cards)
 
+User should see on first load:
+  1) Compact blue header with 1→2→3 flow
+  2) Two upload cards on top + status
+  3) Left sidebar "票次列表 / 待上传"
+  4) Right empty panel "按票核对计算" with packing/weight/过程 placeholders
