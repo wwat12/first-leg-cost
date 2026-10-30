@@ -1,12 +1,17 @@
-STATUS: DEPLOYING
+STATUS: LIVE
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
+Deploy: dep-dbi5ckc9v7es738ofq5g status=live (Asia/Shanghai 2026-10-30 16:34)
+Commit: 3ca234c Bill preview/tickets: drop 运单号; each row is a ticket via G/K/R
 
 Bill parse:
-  - Prefer cleaned sheet(s) only; never merge other month tabs with cleaned
-  - Allocation / preview columns ONLY: G 扩展单号, K 收费重, R 金额 (CNY)
-  - 运单号 removed from bill preview; not used for ticket grouping
+  - Prefer cleaned sheet(s) only (row1 headers); never merge other month tabs with cleaned
+  - Allocation / preview columns ONLY: G 扩展单号 (FBA), K 收费重, R 金额 (CNY)
+  - 运单号 removed from bill preview; not used for ticket grouping or allocation
   - Tickets = each data row keyed by 扩展单号+金额+收费重 (+ row index)
 
-Pending Render deploy after push.
+attachment / sample_bill_user:
+  tickets=84  rows=84  total_freight=¥81516.90  sheets=['26.9'] select=cleaned
+
+verify_sample.py: ALL PASS
