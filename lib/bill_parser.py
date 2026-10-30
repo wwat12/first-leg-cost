@@ -12,18 +12,18 @@ HEADER_KEYS = ("运单号", "费用类型")
 WEIGHT_ALIASES = ("收费重(KG/CBM)", "收费重", "计费重", "计费重量", "收费重量")
 AMOUNT_CNY_ALIASES = ("折合人民币", "折算人民币", "本位币金额")
 AMOUNT_ALIASES = ("金额",)
-FBA_ALIASES = ("扩展单号", "客户单号")
+FBA_TOKEN_RE = re.compile(r"FBA[A-Z0-9]+", re.IGNORECASE)
 
 
 @dataclass
 class FreightRow:
     row_index: int
-    waybill_no: str          # 运单号
+    waybill_no: str  # 运单号
     fee_type: str
     date: str
-    customer_no: str         # 客户单号 (primary FBA)
-    tracking_no: str         # 转单号
-    ext_nos: str             # 扩展单号 (comma-separated FBA ids)
+    customer_no: str  # 客户单号
+    tracking_no: str  # 转单号
+    ext_nos: str  # 扩展单号 (G列，货件号来源)
     service_type: str
     warehouse: str
     zipcode: str
@@ -40,12 +40,11 @@ class FreightRow:
     status: str
     description: str
     customs_mode: str
-    fba_ids: list[str]       # parsed FBA shipment ids
+    fba_ids: list[str]  # from 扩展单号 (prefer) / 客户单号 fallback
     shop: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
 
 def _norm(v: Any) -> str:
@@ -87,7 +86,6 @@ def _pick_col(cols: dict[str, int], aliases: tuple[str, ...]) -> int | None:
     for a in aliases:
         if a in cols:
             return cols[a]
-    # fuzzy: contain
     for name, idx in cols.items():
         for a in aliases:
             if a in name:
@@ -95,22 +93,36 @@ def _pick_col(cols: dict[str, int], aliases: tuple[str, ...]) -> int | None:
     return None
 
 
-def _parse_fba_ids(customer_no: str, ext_nos: str) -> list[str]:
+def _extract_fba_tokens(text: str) -> list[str]:
+    """Extract FBA… tokens in order, de-duplicated."""
     ids: list[str] = []
     seen: set[str] = set()
-    # Prefer 扩展单号 when present; also include 客户单号 if missing from list
-    raw = ext_nos or customer_no
-    parts = re.split(r"[,，;；\s]+", raw)
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        if p not in seen:
-            seen.add(p)
-            ids.append(p)
-    if customer_no and customer_no not in seen:
-        ids.insert(0, customer_no)
+    for m in FBA_TOKEN_RE.finditer(text or ""):
+        tok = m.group(0).upper()
+        # preserve common casing FBA…
+        raw = m.group(0)
+        if raw.upper().startswith("FBA"):
+            tok = "FBA" + raw[3:]
+        if tok not in seen:
+            seen.add(tok)
+            ids.append(tok)
     return ids
+
+
+def _parse_fba_ids(customer_no: str, ext_nos: str) -> list[str]:
+    """G列扩展单号 is source of truth; fall back to 客户单号 only if empty."""
+    from_ext = _extract_fba_tokens(ext_nos)
+    if from_ext:
+        return from_ext
+    from_cust = _extract_fba_tokens(customer_no)
+    if from_cust:
+        return from_cust
+    # last resort: treat whole string as one id if it looks like an id
+    for raw in (ext_nos, customer_no):
+        s = _norm(raw)
+        if s and " " not in s and "," not in s and "，" not in s:
+            return [s]
+    return []
 
 
 def detect_detail_sheets(path: str) -> list[str]:
@@ -121,7 +133,6 @@ def detect_detail_sheets(path: str) -> list[str]:
             if "汇总" in name or "summary" in name.lower():
                 continue
             ws = wb[name]
-            # peek first 40 rows
             found = False
             for i, row in enumerate(ws.iter_rows(max_row=40, max_col=25, values_only=True)):
                 vals = [_norm(v) for v in row]
@@ -136,7 +147,7 @@ def detect_detail_sheets(path: str) -> list[str]:
 
 
 def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict[str, Any]:
-    """Parse a Meitong-style bill. Returns summary + freight rows."""
+    """Parse a Meitong-style bill. Returns summary + freight rows (费用类型=运费 only)."""
     wb = load_workbook(path, data_only=True)
     try:
         if sheet_name and sheet_name in wb.sheetnames:
@@ -186,12 +197,9 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                 waybill = _norm(ws.cell(r, col_waybill).value)
                 fee = _norm(ws.cell(r, col_fee).value)
 
-                # Skip blank / footer / bank info
                 if not waybill and not fee:
-                    # check if it's a total footer (金额 in amount cols without waybill)
                     continue
                 if not waybill:
-                    # footer like blank 运单号 with 合计 amounts
                     continue
                 if waybill.startswith("收款") or "账户" in waybill or "公司名称" in waybill:
                     continue
@@ -245,11 +253,9 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                 )
                 all_rows.append(row)
 
-            # Prefer first detail sheet that yields rows
             if all_rows:
                 break
 
-        # Ticket-level aggregation
         tickets: dict[str, dict[str, Any]] = {}
         for row in all_rows:
             t = tickets.setdefault(

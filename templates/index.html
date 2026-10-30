@@ -9,9 +9,8 @@
 <body>
   <header class="top">
     <div class="wrap">
-      <h1>FBA 头程运费分摊 <span class="badge">MVP</span></h1>
-      <p class="sub">上传物流账单 → 按计费重分摊运费 →（可选）赛狐货件匹配 → SKU 单件头程
-        {% if session.get('authed') %}<a href="{{ url_for('logout') }}" style="color:#fff;opacity:.8;margin-left:12px;font-size:.85rem;">退出登录</a>{% endif %}</p>
+      <h1>FBA 头程运费分摊</h1>
+      <p class="sub">账单运费 × 装箱实际毛重 → 货件运费 → SKU 分摊 → 单件头程（含 LR，按店铺分别计算）</p>
     </div>
   </header>
 
@@ -26,12 +25,20 @@
       {% endif %}
     {% endwith %}
 
-    <!-- Step 1: shop + bill -->
+    <section class="card" id="formula">
+      <h2>分摊公式（三步）</h2>
+      <ol class="hint" style="padding-left:1.2rem;line-height:1.7">
+        <li><strong>货件运费</strong>＝整票实际运费 × 该货件实际毛重 ÷ 本票所有货件实际毛重之和</li>
+        <li><strong>SKU 分摊</strong>：SKU总重量＝发货数量×单件含包装重量；SKU分摊＝货件运费×SKU总重÷货件内SKU总重之和。<strong>货件内仅 1 个 SKU 时，货件运费全归该 SKU</strong>（无需单件重量）</li>
+        <li><strong>单件头程</strong>＝SKU分摊÷数量；同一 SKU 出现在多个货件时：合计分摊÷合计数量</li>
+      </ol>
+      <p class="hint">匹配规则：账单只取费用类型＝<strong>运费</strong>，按<strong>运单号</strong>成票；货件列表取自 <strong>G 列「扩展单号」</strong>中的 FBA… 号，与赛狐<strong>装箱信息</strong>的<strong>货件编号</strong>对应。重量单位 kg。不同店铺分别计算（有店铺列时按店铺+SKU 汇总）。</p>
+    </section>
+
     <section class="card" id="bill">
-      <h2>① 上传物流账单（美通风格）</h2>
-      <p class="hint">不区分店铺：全部 SKU（含 LR）一并分摊。自动跳过「应收汇总」表，定位含「运单号 / 费用类型」的明细表；仅统计费用类型 = <strong>运费</strong>，排除清关费等。</p>
-      <form method="post" action="{{ url_for('upload_bill') }}" enctype="multipart/form-data" id="bill-form">
-        <input type="hidden" name="shop" value="" />
+      <h2>① 上传物流账单</h2>
+      <p class="hint">美通风格对账单 .xlsx。自动跳过「汇总」表；仅统计费用类型＝运费；金额用「折合人民币」；<strong>货件号以 G 列扩展单号为准</strong>。</p>
+      <form method="post" action="{{ url_for('upload_bill') }}" enctype="multipart/form-data">
         <div class="row">
           <label>账单文件 (.xlsx)</label>
           <input type="file" name="bill_file" accept=".xlsx,.xls" required />
@@ -59,7 +66,7 @@
             <tr>
               <th>运单号</th>
               <th>客户单号</th>
-              <th>扩展单号 / FBA</th>
+              <th>扩展单号 / FBA（匹配用）</th>
               <th>服务类型</th>
               <th>仓库</th>
               <th>收费重</th>
@@ -87,28 +94,46 @@
         {% endif %}
       </div>
       <div class="actions">
-        <a class="btn" href="{{ url_for('export_freight') }}">导出运费按货件 Excel</a>
+        <a class="btn" href="{{ url_for('export_freight') }}">导出运费 Excel</a>
       </div>
       {% endif %}
     </section>
 
-    <!-- Step 2: Saihu -->
     <section class="card" id="saihu">
-      <h2>② 赛狐 FBA 货件导出（可选）</h2>
-      <p class="hint">用于按重量把运费分摊到 SKU。列名不确定时，上传后手动映射。若暂无赛狐文件，可只做步骤②并导出运费。</p>
+      <h2>② 上传赛狐装箱信息</h2>
+      <p class="hint">
+        上传赛狐导出（含 <strong>装箱信息</strong> 表即可；同文件有「货件信息」时自动带出店铺）。
+        货件编号 ↔ 账单扩展单号；实际毛重＝总重量或箱子重量(kg)；数量＝单箱数量×箱数。
+        含 LR 的 SKU 一并计算。
+      </p>
       <form method="post" action="{{ url_for('upload_saihu') }}" enctype="multipart/form-data">
         <div class="row">
           <label>赛狐导出 (.xlsx)</label>
           <input type="file" name="saihu_file" accept=".xlsx,.xls" required />
         </div>
         <div class="actions">
-          <button type="submit" class="btn">上传并识别列</button>
+          <button type="submit" class="btn primary">上传并解析装箱信息</button>
         </div>
       </form>
 
+      <h3 style="margin-top:1.25rem;font-size:1rem">（可选）单件含包装重量表</h3>
+      <p class="hint">仅当<strong>同一货件内有多个 SKU</strong>时需要，用于按「数量×单件重量」分摊。单 SKU 货件不需要。列：SKU + 单件含包装重量(kg)。</p>
+      <form method="post" action="{{ url_for('upload_unit_weights') }}" enctype="multipart/form-data">
+        <div class="row">
+          <label>单件重量表 (.xlsx)</label>
+          <input type="file" name="unit_weight_file" accept=".xlsx,.xls" required />
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn">上传单件重量</button>
+        </div>
+      </form>
+      {% if unit_weight_info %}
+        <p class="meta">已加载单件重量：{{ unit_weight_info.count }} 个 SKU</p>
+      {% endif %}
+
       {% if saihu_peek and saihu_peek.sheets %}
       <form method="post" action="{{ url_for('parse_saihu_route') }}" class="mapper">
-        <h3>列映射</h3>
+        <h3>列映射（自动识别失败时）</h3>
         {% set sheet0 = saihu_peek.sheets[0] %}
         <div class="row">
           <label>工作表</label>
@@ -162,7 +187,7 @@
             </select>
           </div>
           <div>
-            <label>总重量（若无单件）</label>
+            <label>总重量 / 箱子重量</label>
             <select name="map_total_weight">
               <option value="">— 可选 —</option>
               {% for c in cols %}
@@ -173,14 +198,13 @@
           <div>
             <label>重量模式</label>
             <select name="weight_mode">
+              <option value="total">映射列已是总重/箱子重</option>
               <option value="unit">按单件重量 × 数量</option>
-              <option value="total">映射列已是该行总重</option>
             </select>
           </div>
         </div>
-        <p class="hint">识别到的列：{% for c in cols %}<code>{{ c }}</code> {% endfor %}</p>
         <div class="actions">
-          <button type="submit" class="btn primary">解析赛狐数据</button>
+          <button type="submit" class="btn primary">按映射解析</button>
         </div>
       </form>
       {% endif %}
@@ -190,22 +214,22 @@
         <div class="stat"><div class="num">{{ saihu.row_count }}</div><div class="lbl">明细行</div></div>
         <div class="stat"><div class="num">{{ saihu.fba_count }}</div><div class="lbl">货件数</div></div>
         <div class="stat"><div class="num">{{ saihu.sku_count }}</div><div class="lbl">SKU 数</div></div>
+        <div class="stat"><div class="num">{{ (saihu.shops or [])|length or 1 }}</div><div class="lbl">店铺维度</div></div>
       </div>
+      <p class="meta">工作表：<code>{{ saihu.sheet }}</code>
+        {% if saihu.shops %} · 店铺：{{ saihu.shops|join('、') }}{% endif %}
+      </p>
       {% endif %}
     </section>
 
-    <!-- Step 3: allocate -->
     <section class="card" id="allocate">
-      <h2>③ 按重量分摊 → SKU 单件头程</h2>
-      <p class="hint">
-        公式：① 货件运费 = 整票总运费 × (货件计费重 / 整票总计费重)；
-        ② SKU分摊 = 货件运费 × (SKU分摊重量 / 货件分摊总重量)；
-        ③ 单件头程 = SKU全部分摊费用之和 / SKU总发货数量。
-        包含全部 SKU（含名称含「LR」的 SKU），不按店铺拆分。
-      </p>
+      <h2>③ 执行分摊 → SKU 单件头程</h2>
+      {% if alloc_error %}
+        <div class="flash error">{{ alloc_error }}</div>
+      {% endif %}
       <form method="post" action="{{ url_for('allocate_route') }}">
         <div class="actions">
-          <button type="submit" class="btn primary" {% if not bill or not saihu %}disabled title="需同时有账单与赛狐数据"{% endif %}>
+          <button type="submit" class="btn primary" {% if not bill or not saihu %}disabled title="需同时有账单与装箱数据"{% endif %}>
             执行分摊
           </button>
         </div>
@@ -213,15 +237,19 @@
 
       {% if alloc and alloc.sku_results %}
       <div class="summary-grid" id="result">
-        <div class="stat"><div class="num">{{ alloc.sku_count }}</div><div class="lbl">SKU</div></div>
+        <div class="stat"><div class="num">{{ alloc.sku_count }}</div><div class="lbl">店铺×SKU</div></div>
         <div class="stat"><div class="num">¥{{ '%.2f'|format(alloc.total_allocated) }}</div><div class="lbl">已分摊运费</div></div>
+        <div class="stat"><div class="num">¥{{ '%.2f'|format(alloc.included_bill_freight or 0) }}</div><div class="lbl">计入账单运费</div></div>
         <div class="stat"><div class="num">{{ alloc.matched_fba_count }}</div><div class="lbl">匹配货件</div></div>
-        <div class="stat"><div class="num">{{ alloc.unmatched_freight|length }}</div><div class="lbl">未匹配运单</div></div>
       </div>
+      {% if alloc.allocation_balance_ok is defined %}
+        <p class="meta">{% if alloc.allocation_balance_ok %}✓ 分摊合计与计入运费一致（舍入范围内）{% else %}⚠ 分摊合计与计入运费不一致，请检查{% endif %}</p>
+      {% endif %}
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
+              <th>店铺</th>
               <th>SKU</th>
               <th>总发货数量</th>
               <th>分摊运费合计</th>
@@ -233,6 +261,7 @@
           <tbody>
             {% for r in alloc.sku_results[:300] %}
             <tr>
+              <td>{{ r.shop or '—' }}</td>
               <td>{{ r.sku }}</td>
               <td class="num">{{ r.total_qty }}</td>
               <td class="num">{{ '%.4f'|format(r.total_freight) }}</td>
@@ -264,7 +293,7 @@
       <form method="post" action="{{ url_for('reset') }}" onsubmit="return confirm('确认清空当前会话数据？');">
         <button type="submit" class="btn danger">清空会话</button>
       </form>
-      <p class="hint">本地 MVP · 数据仅存本机 uploads/ · 下一步可接赛狐 API / 多店铺账套</p>
+      <p class="hint">数据仅存本机 uploads/ · 刷新会话可清空</p>
     </section>
   </main>
 </body>
