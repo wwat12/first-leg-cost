@@ -1,12 +1,11 @@
-STATUS: LIVE
+STATUS: DEPLOYING
 
 Permanent URL: https://first-leg-cost.onrender.com
 Service ID: srv-dbi33ih42hec73cai940
-Deploy: (pending) — workbench always visible
+Commit: (pending push) mockup layout rebuild
 
 Change:
-  - Step 3 workbench (left ticket list + right calc panel) always shown
-  - Empty states when bill/saihu not yet uploaded (no longer gated)
-  - Matches mockup layout on first load
+  - Rebuild UI to match mockup: top side-by-side uploads, left ticket list ALWAYS visible, right packing + unit weight + calc + 过程
+  - Empty states for list/panel when uploads missing
+  - Compact bill/saihu stats in upload cards (no long stacked step cards)
 
-verify: jinja empty / bill-only / both-uploaded OK
