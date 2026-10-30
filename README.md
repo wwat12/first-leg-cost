@@ -8,7 +8,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 永久 URL | _（部署完成后填写，形如 `https://first-leg-cost.onrender.com`）_ |
+| 永久 URL | **https://first-leg-cost.onrender.com** |
 | 托管方 | Render（免费 Web Service）或同等 Python 主机 |
 | 休眠说明 | Render 免费实例约 **15 分钟无访问会休眠**；下次打开约需 **30–60 秒** 冷启动。仍比 Cloudflare 临时隧道稳定（域名不变）。 |
 
@@ -19,8 +19,11 @@
 ```bash
 # 已连接 GitHub + Render 时
 git add -A && git commit -m "update" && git push
-# Render 会自动从仓库重新构建；或在 Render Dashboard → Manual Deploy
+# Render 自动从 main 重新构建；或 Dashboard → Manual Deploy
+# CLI: render deploys create srv-dbi33ih42hec73cai940 --confirm
 ```
+
+**免费层休眠**：约 **15 分钟无访问会休眠**；下次打开冷启动约 **30–60 秒**（偶发更久）。域名固定不变。`uploads/` 为临时盘，重启后清空。
 
 本地 Docker 自测：
 

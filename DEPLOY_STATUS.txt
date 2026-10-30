@@ -1,0 +1,20 @@
+STATUS: LIVE
+
+Permanent URL: https://first-leg-cost.onrender.com
+Service ID: srv-dbi33ih42hec73cai940
+Dashboard: https://dashboard.render.com/web/srv-dbi33ih42hec73cai940
+Region: singapore | Plan: free | Runtime: python
+Repo: https://github.com/wwat12/first-leg-cost (branch main)
+Deploy: dep-dbi33j942hec73caiap0 status=live (Asia/Shanghai ~2026-10-30 13:58)
+
+Verify: PASS — POST /upload_bill sample_bill.xlsx → total_freight=36095.4
+  API /api/bill_summary: {"ok":true,"total_freight":36095.4,"freight_row_count":38,"ticket_count":38}
+
+Free-tier caveats:
+  - Spins down after ~15 min idle; next request cold-starts ~30–60s (sometimes longer).
+  - Ephemeral disk: uploads/exports cleared on restart/redeploy.
+  - Auto-deploy on git push to main; or Manual Deploy in Dashboard.
+
+Redeploy:
+  git push origin main
+  # or: render deploys create srv-dbi33ih42hec73cai940 --confirm
