@@ -324,3 +324,42 @@ def freight_by_shipment_export_rows(freight_rows: list[dict], shop: str = "") ->
             }
         )
     return out
+
+
+def allocate_one_ticket(
+    freight_rows: list[dict[str, Any]],
+    shipment_skus: list[dict[str, Any]],
+    ticket_id: str,
+    shop: str = "",
+    shipment_weights: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Allocate a single bill ticket (one 票). Filters freight_rows to ticket_id."""
+    tid = str(ticket_id or "").strip()
+    if not tid:
+        return {"ok": False, "error": "未指定票标识"}
+    subset = [r for r in freight_rows if str(r.get("ticket_id") or "") == tid]
+    if not subset:
+        # allow match by ext_nos when UI passes extension string
+        subset = [
+            r
+            for r in freight_rows
+            if str(r.get("ext_nos") or "") == tid or str(r.get("ticket_id") or "") == tid
+        ]
+    if not subset:
+        return {"ok": False, "error": f"账单中找不到票：{tid}"}
+    result = allocate_by_weight(
+        subset,
+        shipment_skus,
+        shop=shop,
+        shipment_weights=shipment_weights,
+    )
+    result["ticket_id"] = subset[0].get("ticket_id") or tid
+    result["ext_nos"] = subset[0].get("ext_nos") or ""
+    result["ticket_freight"] = sum(float(x.get("amount_cny") or 0) for x in subset)
+    result["ticket_weight"] = sum(float(x.get("chargeable_weight") or 0) for x in subset)
+    result["fba_ids"] = []
+    for x in subset:
+        for fid in x.get("fba_ids") or []:
+            if fid not in result["fba_ids"]:
+                result["fba_ids"].append(fid)
+    return result

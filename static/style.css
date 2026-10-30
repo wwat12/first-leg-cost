@@ -412,3 +412,33 @@ code {
 .footer-card form { margin: 0; }
 
 .mapper { margin-top: 4px; }
+
+/* Packing detail + per-ticket calc */
+.table-scroll {
+  max-height: 420px;
+  overflow: auto;
+}
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: 0 1px 0 var(--border);
+}
+.tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.tag.ok { background: #e8f7ef; color: var(--ok); }
+.tag.warn { background: #fff6e8; color: #9a6700; }
+.ship-block {
+  margin: 8px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+}
+.ship-block:last-of-type { border-bottom: 0; }
+.ticket-calc { margin-top: 12px; }
+.wrap { max-width: 1080px; }

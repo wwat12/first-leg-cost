@@ -24,7 +24,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from lib.bill_parser import parse_bill
 from lib.saihu import peek_columns, parse_saihu, parse_packing, parse_unit_weight_table
-from lib.allocate import allocate_by_weight, freight_by_shipment_export_rows
+from lib.allocate import allocate_by_weight, allocate_one_ticket, freight_by_shipment_export_rows
 
 BASE = Path(__file__).resolve().parent
 UPLOADS = BASE / "uploads"
@@ -89,38 +89,97 @@ def _write_sheet(ws, rows: list[dict], headers: list[str] | None = None):
         ws.column_dimensions[ws.cell(1, c).column_letter].width = 16
 
 
-def _run_allocate(state: dict) -> dict | None:
-    bill = state.get("bill")
-    saihu = state.get("saihu")
-    if not bill or not bill.get("rows") or not saihu or not saihu.get("rows"):
-        return None
+def _saihu_rows_with_weights(state: dict, extra_weights: dict[str, float] | None = None) -> list[dict]:
+    saihu = state.get("saihu") or {}
+    rows = saihu.get("rows") or []
+    weights = dict(state.get("unit_weights") or {})
+    if extra_weights:
+        weights.update({k: float(v) for k, v in extra_weights.items() if float(v) > 0})
+    if not weights:
+        return [dict(r) for r in rows]
+    patched = []
+    for r in rows:
+        rr = dict(r)
+        if float(rr.get("unit_weight") or 0) <= 0 and rr.get("sku") in weights:
+            rr["unit_weight"] = float(weights[rr["sku"]])
+        patched.append(rr)
+    return patched
+
+
+def _ticket_packing_preview(state: dict, ticket_id: str) -> dict:
+    """SKUs / multi-SKU flags for one bill ticket, for the per-ticket weight form."""
+    bill = state.get("bill") or {}
+    saihu = state.get("saihu") or {}
+    rows = [r for r in (bill.get("rows") or []) if str(r.get("ticket_id") or "") == ticket_id]
+    if not rows:
+        return {"ok": False, "error": "票不存在"}
+    fba_ids: list[str] = []
+    for r in rows:
+        for fid in r.get("fba_ids") or []:
+            if fid and fid not in fba_ids:
+                fba_ids.append(fid)
     unit_weights = state.get("unit_weights") or {}
-    rows = saihu["rows"]
-    if unit_weights:
-        # inject missing unit weights
-        patched = []
-        for r in rows:
-            rr = dict(r)
+    by_fba: dict[str, list[dict]] = {}
+    for s in saihu.get("rows") or []:
+        fid = s.get("fba_id")
+        if fid in fba_ids:
+            rr = dict(s)
             if float(rr.get("unit_weight") or 0) <= 0 and rr.get("sku") in unit_weights:
-                rr["unit_weight"] = unit_weights[rr["sku"]]
-            patched.append(rr)
-        rows = patched
-    return allocate_by_weight(
-        bill["rows"],
-        rows,
-        shop="",
-        shipment_weights=saihu.get("shipment_weights"),
-    )
+                rr["unit_weight"] = float(unit_weights[rr["sku"]])
+            by_fba.setdefault(fid, []).append(rr)
+    shipments = []
+    needs_unit_weight = False
+    skus_needing_weight: list[str] = []
+    for fid in fba_ids:
+        lines = by_fba.get(fid) or []
+        multi = len(lines) > 1
+        missing = [x["sku"] for x in lines if float(x.get("unit_weight") or 0) <= 0]
+        if multi and missing:
+            needs_unit_weight = True
+            for sku in missing:
+                if sku not in skus_needing_weight:
+                    skus_needing_weight.append(sku)
+        shipments.append(
+            {
+                "fba_id": fid,
+                "matched": bool(lines),
+                "multi_sku": multi,
+                "gross_weight": (saihu.get("shipment_weights") or {}).get(fid)
+                or (lines[0].get("shipment_gross_weight") if lines else 0),
+                "lines": lines,
+                "missing_unit_weight_skus": missing if multi else [],
+            }
+        )
+    return {
+        "ok": True,
+        "ticket_id": ticket_id,
+        "ext_nos": rows[0].get("ext_nos") or "",
+        "freight": sum(float(x.get("amount_cny") or 0) for x in rows),
+        "chargeable_weight": sum(float(x.get("chargeable_weight") or 0) for x in rows),
+        "fba_ids": fba_ids,
+        "shipments": shipments,
+        "needs_unit_weight": needs_unit_weight,
+        "skus_needing_weight": skus_needing_weight,
+    }
 
 
 @app.route("/")
 def index():
     state = _load_state()
+    selected_ticket = state.get("selected_ticket_id") or ""
+    ticket_preview = None
+    if selected_ticket and state.get("bill") and state.get("saihu"):
+        ticket_preview = _ticket_packing_preview(state, selected_ticket)
+    ticket_allocs = state.get("ticket_allocs") or {}
     return render_template(
         "index.html",
         bill=state.get("bill"),
         saihu=state.get("saihu"),
         alloc=state.get("alloc"),
+        ticket_allocs=ticket_allocs,
+        selected_ticket_id=selected_ticket,
+        ticket_preview=ticket_preview,
+        current_ticket_result=state.get("current_ticket_result"),
         saihu_peek=state.get("saihu_peek"),
         saihu_mapping=state.get("saihu_mapping"),
         unit_weight_info=state.get("unit_weight_info"),
@@ -198,7 +257,8 @@ def upload_saihu():
         _save_state(state)
         shops = "、".join(auto.get("shops") or []) or "（未识别店铺，输出仍保留店铺列）"
         flash(
-            f"装箱信息解析成功：{auto['row_count']} 行，"
+            f"装箱信息解析成功：{auto['row_count']} 条明细"
+            f"（聚合 {auto.get('agg_row_count', auto['row_count'])} 个货件×SKU），"
             f"{auto['fba_count']} 个货件，{auto['sku_count']} 个 SKU；店铺：{shops}",
             "ok",
         )
@@ -304,8 +364,26 @@ def upload_unit_weights():
     return redirect(url_for("index") + "#allocate")
 
 
-@app.route("/allocate", methods=["POST"])
-def allocate_route():
+@app.route("/select_ticket", methods=["POST"])
+def select_ticket():
+    state = _load_state()
+    if not state.get("bill") or not state.get("saihu"):
+        flash("请先完成步骤 1（账单）与步骤 2（装箱）", "error")
+        return redirect(url_for("index"))
+    ticket_id = (request.form.get("ticket_id") or "").strip()
+    if not ticket_id:
+        flash("请选择一票", "error")
+        return redirect(url_for("index") + "#allocate")
+    state["selected_ticket_id"] = ticket_id
+    state.pop("current_ticket_result", None)
+    state.pop("alloc_error", None)
+    _save_state(state)
+    return redirect(url_for("index") + "#allocate")
+
+
+@app.route("/allocate_ticket", methods=["POST"])
+def allocate_ticket_route():
+    """Compute ONE ticket: user supplies unit packed weights for multi-SKU, then clicks."""
     state = _load_state()
     bill = state.get("bill")
     saihu = state.get("saihu")
@@ -315,37 +393,169 @@ def allocate_route():
     if not saihu or not saihu.get("rows"):
         flash("请先上传并解析赛狐装箱信息", "error")
         return redirect(url_for("index") + "#saihu")
-    result = _run_allocate(state)
-    if result is None:
-        flash("分摊失败：数据不完整", "error")
-        return redirect(url_for("index"))
-    if not result.get("ok"):
-        state["alloc_error"] = result.get("error")
-        state.pop("alloc", None)
-        _save_state(state)
-        flash(result.get("error") or "分摊失败", "error")
+
+    ticket_id = (request.form.get("ticket_id") or state.get("selected_ticket_id") or "").strip()
+    if not ticket_id:
+        flash("请先选择一票再计算", "error")
         return redirect(url_for("index") + "#allocate")
-    state["alloc"] = result
+
+    # Collect per-SKU unit packed weights from the form (uw_<sku>)
+    form_weights: dict[str, float] = {}
+    for key, val in request.form.items():
+        if not key.startswith("uw_"):
+            continue
+        sku = key[3:]
+        try:
+            w = float(str(val).strip().replace(",", "")) if str(val).strip() else 0.0
+        except ValueError:
+            w = 0.0
+        if sku and w > 0:
+            form_weights[sku] = w
+
+    # Merge into session unit_weights (keep prior entries)
+    unit_weights = dict(state.get("unit_weights") or {})
+    unit_weights.update(form_weights)
+    state["unit_weights"] = unit_weights
+    state["selected_ticket_id"] = ticket_id
+
+    preview = _ticket_packing_preview(state, ticket_id)
+    if preview.get("needs_unit_weight"):
+        still_missing = [
+            s for s in preview.get("skus_needing_weight") or [] if s not in unit_weights
+        ]
+        # Re-check after form weights
+        still_missing = [s for s in still_missing if float(unit_weights.get(s) or 0) <= 0]
+        # Also check SKUs that appear in multi-SKU shipments for this ticket
+        still_missing = []
+        for ship in preview.get("shipments") or []:
+            if not ship.get("multi_sku"):
+                continue
+            for ln in ship.get("lines") or []:
+                sku = ln["sku"]
+                uw = float(ln.get("unit_weight") or 0) or float(unit_weights.get(sku) or 0)
+                if uw <= 0 and sku not in still_missing:
+                    still_missing.append(sku)
+        if still_missing:
+            state["alloc_error"] = (
+                "多SKU货件需先填写单件含包装重量(kg)再计算："
+                + "、".join(still_missing)
+            )
+            state.pop("current_ticket_result", None)
+            _save_state(state)
+            flash(state["alloc_error"], "error")
+            return redirect(url_for("index") + "#allocate")
+
+    rows = _saihu_rows_with_weights(state, form_weights)
+    result = allocate_one_ticket(
+        bill["rows"],
+        rows,
+        ticket_id,
+        shop="",
+        shipment_weights=saihu.get("shipment_weights"),
+    )
+    if not result.get("ok"):
+        state["alloc_error"] = result.get("error") or "本票分摊失败"
+        state.pop("current_ticket_result", None)
+        _save_state(state)
+        flash(state["alloc_error"], "error")
+        return redirect(url_for("index") + "#allocate")
+
+    missing = result.get("multi_sku_missing_unit_weight") or []
+    if missing and not result.get("sku_results"):
+        ids = "、".join(m["fba_id"] for m in missing)
+        state["alloc_error"] = f"本票多SKU货件仍缺单件含包装重量，未计算出结果：{ids}"
+        state["current_ticket_result"] = result
+        _save_state(state)
+        flash(state["alloc_error"], "error")
+        return redirect(url_for("index") + "#result")
+
+    # Persist this ticket's result
+    ticket_allocs = dict(state.get("ticket_allocs") or {})
+    ticket_allocs[ticket_id] = result
+    state["ticket_allocs"] = ticket_allocs
+    state["current_ticket_result"] = result
+    state["alloc"] = _merge_ticket_allocs(ticket_allocs)  # cumulative for export
     state.pop("alloc_error", None)
     _save_state(state)
-    bal = "平衡" if result.get("allocation_balance_ok") else "不平衡(请检查)"
+
     flash(
-        f"分摊完成：{result['sku_count']} 个 SKU，"
-        f"已分摊运费 ¥{result['total_allocated']:.2f} "
-        f"（计入账单运费 ¥{result.get('included_bill_freight', 0):.2f}，{bal}），"
-        f"匹配货件 {result['matched_fba_count']} 个",
+        f"本票已计算：运费 ¥{result.get('ticket_freight', result.get('included_bill_freight', 0)):.2f}，"
+        f"{result.get('sku_count', 0)} 个 SKU，"
+        f"分摊 ¥{result.get('total_allocated', 0):.2f}",
         "ok",
     )
-    missing = result.get("multi_sku_missing_unit_weight") or []
     if missing:
-        ids = "、".join(m["fba_id"] for m in missing[:8])
-        more = f" 等{len(missing)}个" if len(missing) > 8 else f"（{len(missing)}个）"
         flash(
-            f"有多SKU货件因缺少单件含包装重量未分摊：{ids}{more}。"
-            "请在步骤 2 上传单件重量表后重新分摊。",
+            "部分多SKU货件因缺重量被跳过："
+            + "、".join(m["fba_id"] for m in missing[:6]),
             "error",
         )
     return redirect(url_for("index") + "#result")
+
+
+def _merge_ticket_allocs(ticket_allocs: dict) -> dict:
+    """Merge per-ticket results into a cumulative alloc for export / summary."""
+    sku_map: dict[tuple[str, str], dict] = {}
+    shipment_allocs: list = []
+    unmatched: list = []
+    multi_missing: list = []
+    matched_fba: set[str] = set()
+    included = 0.0
+    for res in ticket_allocs.values():
+        included += float(res.get("included_bill_freight") or 0)
+        shipment_allocs.extend(res.get("shipment_allocs") or [])
+        unmatched.extend(res.get("unmatched_freight") or [])
+        multi_missing.extend(res.get("multi_sku_missing_unit_weight") or [])
+        matched_fba.update(
+            fid
+            for r in (res.get("sku_results") or [])
+            for fid in (r.get("fba_ids") or [])
+        )
+        for r in res.get("sku_results") or []:
+            key = (r.get("shop") or "", r["sku"])
+            agg = sku_map.setdefault(
+                key,
+                {
+                    "shop": r.get("shop") or "",
+                    "sku": r["sku"],
+                    "total_freight": 0.0,
+                    "total_qty": 0.0,
+                    "shipment_count": 0,
+                    "fba_ids": set(),
+                },
+            )
+            agg["total_freight"] += float(r["total_freight"])
+            agg["total_qty"] += float(r["total_qty"])
+            agg["shipment_count"] += int(r.get("shipment_count") or 0)
+            agg["fba_ids"].update(r.get("fba_ids") or [])
+    sku_results = []
+    for agg in sorted(sku_map.values(), key=lambda x: (x["shop"], x["sku"])):
+        qty = agg["total_qty"]
+        sku_results.append(
+            {
+                "shop": agg["shop"],
+                "sku": agg["sku"],
+                "total_freight": round(agg["total_freight"], 6),
+                "total_qty": qty,
+                "unit_first_leg": round(agg["total_freight"] / qty, 6) if qty else 0,
+                "shipment_count": agg["shipment_count"],
+                "fba_ids": sorted(agg["fba_ids"]),
+            }
+        )
+    total_allocated = round(sum(x["total_freight"] for x in sku_results), 4)
+    return {
+        "ok": True,
+        "sku_results": sku_results,
+        "shipment_allocs": shipment_allocs,
+        "unmatched_freight": unmatched,
+        "matched_fba_count": len(matched_fba),
+        "sku_count": len(sku_results),
+        "total_allocated": total_allocated,
+        "included_bill_freight": round(included, 4),
+        "allocation_balance_ok": abs(total_allocated - round(included, 4)) < 0.05,
+        "multi_sku_missing_unit_weight": multi_missing,
+        "tickets_done": len(ticket_allocs),
+    }
 
 
 @app.route("/export/freight")

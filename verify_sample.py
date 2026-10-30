@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 from lib.bill_parser import parse_bill
 from lib.saihu import parse_packing
-from lib.allocate import allocate_by_weight
+from lib.allocate import allocate_by_weight, allocate_one_ticket
 
 
 def main() -> int:
@@ -57,9 +57,11 @@ def main() -> int:
     packing = parse_packing(str(saihu_path))
     assert packing.get("ok"), packing
     print(
-        f"packing: rows={packing['row_count']} fbas={packing['fba_count']} "
-        f"shops={packing.get('shops')}"
+        f"packing: detail={packing['row_count']} agg={packing.get('agg_row_count')} "
+        f"fbas={packing['fba_count']} shops={packing.get('shops')}"
     )
+    assert packing["row_count"] >= 100, packing["row_count"]
+    assert packing["row_count"] == len(packing.get("detail_rows") or []), "detail mismatch"
 
     for fid in fbas:
         w = packing["shipment_weights"].get(fid)
@@ -68,9 +70,10 @@ def main() -> int:
         for ln in lines:
             print(f"    {ln['sku']} qty={ln['qty']} shop={ln.get('shop')}")
 
-    result = allocate_by_weight(
-        trows,
+    result = allocate_one_ticket(
+        bill["rows"],
         packing["rows"],
+        trows[0]["ticket_id"],
         shipment_weights=packing.get("shipment_weights"),
     )
     assert result.get("ok"), result

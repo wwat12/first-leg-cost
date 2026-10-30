@@ -197,6 +197,29 @@ def _load_shop_by_fba(wb) -> dict[str, str]:
     return out
 
 
+def _resolve_sku_cell(ws, headers: dict[str, int], r: int, sku_col: str | None, msku_col: str | None) -> str:
+    """Per-row SKU: prefer SKU cell; if blank, fall back to MSKU (Saihu often leaves SKU empty)."""
+    sku = ""
+    if sku_col and sku_col in headers:
+        sku = _norm(ws.cell(r, headers[sku_col]).value)
+    if not sku and msku_col and msku_col in headers:
+        sku = _norm(ws.cell(r, headers[msku_col]).value)
+    return sku
+
+
+def _sheet_max_row(ws) -> int:
+    """True used row count even when xlsx dimension is stuck at A1 (common in Saihu exports)."""
+    dim = getattr(ws, "max_row", None) or 1
+    if dim > 1:
+        return int(dim)
+    # Fallback: scan via iter_rows (works when dimension is wrong)
+    last = 1
+    for i, row in enumerate(ws.iter_rows(min_row=1, values_only=True), 1):
+        if any(c is not None and str(c).strip() != "" for c in row):
+            last = i
+    return last
+
+
 def parse_packing(
     path: str,
     sheet_name: str | None = None,
@@ -205,9 +228,12 @@ def parse_packing(
 ) -> dict[str, Any]:
     """
     Parse 装箱信息 sheet using columns:
-    货件编号, 总箱数, 总重量, SKU, 单箱数量, 箱数, 箱子重量(kg).
+    货件编号, 总箱数, 总重量, SKU(/MSKU), 单箱数量, 箱数, 箱子重量(kg).
 
-    Continuation SKU rows leave 货件编号/总箱数/总重量/箱数/箱子重量 blank — forward-fill.
+    Every data row with a resolvable SKU is kept (forward-fill blanks on continuation
+    rows). detail_rows = one entry per Excel SKU line; rows = aggregated (fba,sku)
+    for allocation. row_count matches len(detail_rows).
+
     qty = 单箱数量 × 箱数 (箱数 blank → forward-filled; still blank → 单箱数量 alone).
     shipment gross weight = 总重量 (once per FBA) or explicit 箱子重量(kg) rows.
     Unit packed weight is NOT read from packing; optional unit-weight upload covers multi-SKU.
@@ -228,13 +254,24 @@ def parse_packing(
             if name is None:
                 name = wb.sheetnames[0]
         ws = wb[name]
+        # Repair bogus dimension (Saihu often writes ref="A1")
+        try:
+            ws.reset_dimensions()
+            ws.calculate_dimension(force=True)
+        except Exception:
+            pass
         if header_row is None:
             header_row, headers = _detect_header_row(ws)
         else:
             headers = _header_map(ws, header_row)
 
         fba_col = _find_col(headers, FBA_ALIASES)
-        sku_col = _find_col(headers, ["SKU"]) or _find_col(headers, SKU_ALIASES)
+        # Prefer dedicated SKU header for column identity, but also keep MSKU for per-cell fallback
+        sku_col = _find_col(headers, ["SKU"]) or _find_col(headers, [a for a in SKU_ALIASES if a.upper() != "MSKU"])
+        msku_col = _find_col(headers, ["MSKU", "卖家SKU", "Seller SKU"])
+        if not sku_col and msku_col:
+            sku_col = msku_col
+            msku_col = None
         qty_per_box_col = _find_col(headers, QTY_PER_BOX_ALIASES)
         box_count_col = _find_col(headers, BOX_COUNT_ALIASES)
         qty_col = _find_col(headers, QTY_ALIASES)
@@ -243,10 +280,10 @@ def parse_packing(
         # Packing sheet does not supply unit packed weight; optional upload fills multi-SKU.
         shop_col = _find_col(headers, SHOP_ALIASES)
 
-        if not fba_col or not sku_col:
+        if not fba_col or (not sku_col and not msku_col):
             return {
                 "ok": False,
-                "error": f"装箱表缺少货件编号或 SKU 列（表：{name}）",
+                "error": f"装箱表缺少货件编号或 SKU/MSKU 列（表：{name}）",
                 "available_columns": list(headers.keys()),
             }
         if not qty_per_box_col and not qty_col:
@@ -266,6 +303,7 @@ def parse_packing(
         ship_total_w: dict[str, float] = {}
         ship_box_w_sum: dict[str, float] = defaultdict(float)
         lines: dict[tuple[str, str], dict[str, Any]] = {}
+        detail_rows: list[dict[str, Any]] = []
 
         last_fba = ""
         last_total_boxes = 0.0
@@ -273,9 +311,10 @@ def parse_packing(
         last_box_count = 0.0
         last_box_w = 0.0
 
-        for r in range(header_row + 1, (ws.max_row or header_row) + 1):
+        max_r = _sheet_max_row(ws)
+        for r in range(header_row + 1, max_r + 1):
             raw_fba = _norm(ws.cell(r, headers[fba_col]).value)
-            sku = _norm(ws.cell(r, headers[sku_col]).value)
+            sku = _resolve_sku_cell(ws, headers, r, sku_col, msku_col)
             raw_total_boxes = (
                 _to_float(ws.cell(r, headers[total_boxes_col]).value) if total_boxes_col else 0.0
             )
@@ -284,22 +323,31 @@ def parse_packing(
                 _to_float(ws.cell(r, headers[box_count_col]).value) if box_count_col else 0.0
             )
             raw_box_w = _to_float(ws.cell(r, headers[box_w_col]).value) if box_w_col else 0.0
+            per_box = _to_float(ws.cell(r, headers[qty_per_box_col]).value) if qty_per_box_col else 0.0
 
-            if not raw_fba and not sku:
+            # Completely empty line
+            if not raw_fba and not sku and raw_total_boxes <= 0 and raw_total_w <= 0 and per_box <= 0 and raw_box_count <= 0 and raw_box_w <= 0:
                 continue
 
-            fba = raw_fba or last_fba
-            if not fba or not sku:
-                continue
-
+            # New shipment marker even when SKU cell blank: update carry so following
+            # continuation / MSKU rows attach to the correct FBA.
             if raw_fba:
-                # New shipment header row: reset carry state from this row only
                 last_fba = raw_fba
                 last_total_boxes = raw_total_boxes if raw_total_boxes > 0 else 0.0
                 last_total_w = raw_total_w if raw_total_w > 0 else 0.0
                 last_box_count = raw_box_count if raw_box_count > 0 else 0.0
                 last_box_w = raw_box_w if raw_box_w > 0 else 0.0
+
+            fba = raw_fba or last_fba
+            if not fba or not sku:
+                # No usable SKU on this line (and no MSKU fallback) — skip detail, carry kept
+                continue
+
+            if raw_fba:
                 boxes = last_box_count
+                total_boxes = last_total_boxes
+                total_w = last_total_w
+                box_w = last_box_w
             else:
                 # Continuation SKU row: forward-fill blanks from previous header
                 boxes = raw_box_count if raw_box_count > 0 else last_box_count
@@ -311,16 +359,20 @@ def parse_packing(
                     last_total_w = raw_total_w
                 if raw_box_w > 0:
                     last_box_w = raw_box_w
+                total_boxes = last_total_boxes
+                total_w = last_total_w
+                box_w = last_box_w if raw_box_w <= 0 else raw_box_w
+                boxes = boxes
 
             # qty = 单箱数量 × 箱数 (箱数 blank on continuation → forward-filled)
             if qty_per_box_col:
-                per_box = _to_float(ws.cell(r, headers[qty_per_box_col]).value)
                 if boxes > 0:
                     qty = per_box * boxes
                 else:
                     qty = per_box
             else:
                 qty = _to_float(ws.cell(r, headers[qty_col]).value)
+                per_box = qty
 
             # shipment gross: 总重量 once per FBA, else sum explicit 箱子重量 cells only
             # (never re-add forward-filled weight on continuation rows)
@@ -341,6 +393,22 @@ def parse_packing(
             if not shop:
                 shop = shop_by_fba.get(fba, "")
 
+            detail_rows.append(
+                {
+                    "excel_row": r,
+                    "fba_id": fba,
+                    "total_boxes": total_boxes if raw_fba or total_boxes else (raw_total_boxes or last_total_boxes),
+                    "total_weight": total_w if (raw_fba or total_w) else (raw_total_w or last_total_w),
+                    "sku": sku,
+                    "qty_per_box": per_box,
+                    "box_count": boxes,
+                    "box_weight": box_w if raw_fba or raw_box_w > 0 else last_box_w,
+                    "qty": qty,
+                    "unit_weight": row_unit_w,
+                    "shop": shop,
+                }
+            )
+
             key = (fba, sku)
             agg = lines.setdefault(
                 key,
@@ -360,7 +428,7 @@ def parse_packing(
                 agg["shop"] = shop
             agg["row_count"] += 1
 
-        # Build shipment SKU rows with gross weight per FBA
+        # Build shipment SKU rows with gross weight per FBA (for allocation)
         skus_by_fba: dict[str, list[dict]] = defaultdict(list)
         for (fba, sku), agg in lines.items():
             gross = ship_total_w.get(fba)
@@ -385,16 +453,24 @@ def parse_packing(
                 s["shipment_gross_weight"] = shipment_weights[fba]
                 rows.append(s)
 
+        # Fill forward-display weights on detail from shipment_weights when useful
+        for d in detail_rows:
+            if float(d.get("total_weight") or 0) <= 0:
+                d["total_weight"] = shipment_weights.get(d["fba_id"], 0.0)
+            d["shipment_gross_weight"] = shipment_weights.get(d["fba_id"], 0.0)
+
         shops = sorted({r["shop"] for r in rows if r.get("shop")})
         return {
             "ok": True,
             "sheet": name,
             "header_row": header_row,
-            "row_count": len(rows),
+            "row_count": len(detail_rows),
+            "agg_row_count": len(rows),
             "fba_count": len(skus_by_fba),
             "sku_count": len({r["sku"] for r in rows}),
             "shops": shops,
             "shipment_weights": shipment_weights,
+            "detail_rows": detail_rows,
             "rows": rows,
             "source": "packing",
         }
