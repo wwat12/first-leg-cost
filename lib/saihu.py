@@ -204,10 +204,13 @@ def parse_packing(
     unit_weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """
-    Parse 装箱信息-style sheet.
+    Parse 装箱信息 sheet using columns:
+    货件编号, 总箱数, 总重量, SKU, 单箱数量, 箱数, 箱子重量(kg).
 
-    weight (货件实际毛重) = 总重量, else 箱子重量(kg) aggregated per FBA.
-    qty = 单箱数量 × 箱数 (箱数 missing → 单箱数量).
+    Continuation SKU rows leave 货件编号/总箱数/总重量/箱数/箱子重量 blank — forward-fill.
+    qty = 单箱数量 × 箱数 (箱数 blank → forward-filled; still blank → 单箱数量 alone).
+    shipment gross weight = 总重量 (once per FBA) or explicit 箱子重量(kg) rows.
+    Unit packed weight is NOT read from packing; optional unit-weight upload covers multi-SKU.
     Shop joined from 货件信息 when available.
     """
     unit_weights = unit_weights or {}
@@ -237,7 +240,7 @@ def parse_packing(
         qty_col = _find_col(headers, QTY_ALIASES)
         total_w_col = _find_col(headers, ["总重量"]) or _find_col(headers, TOTAL_WEIGHT_ALIASES)
         box_w_col = _find_col(headers, ["箱子重量(kg)", "箱子重量"])
-        unit_w_col = _find_col(headers, UNIT_WEIGHT_ALIASES)
+        # Packing sheet does not supply unit packed weight; optional upload fills multi-SKU.
         shop_col = _find_col(headers, SHOP_ALIASES)
 
         if not fba_col or not sku_col:
@@ -255,23 +258,63 @@ def parse_packing(
 
         shop_by_fba = _load_shop_by_fba(wb)
 
-        # Accumulate per (fba, sku)
-        # shipment_weight: prefer 总重量 (once per fba), else sum box weights
+        # Columns used from 装箱信息 (canonical Saihu packing export):
+        # 货件编号, 总箱数, 总重量, SKU, 单箱数量, 箱数, 箱子重量(kg)
+        # Continuation SKU rows leave 货件编号/总箱数/总重量/箱数/箱子重量 blank — forward-fill.
+        # Weight is recorded only from non-blank cells (do not re-add forward-filled weight).
+        total_boxes_col = _find_col(headers, ["总箱数"])
         ship_total_w: dict[str, float] = {}
         ship_box_w_sum: dict[str, float] = defaultdict(float)
         lines: dict[tuple[str, str], dict[str, Any]] = {}
 
+        last_fba = ""
+        last_total_boxes = 0.0
+        last_total_w = 0.0
+        last_box_count = 0.0
+        last_box_w = 0.0
+
         for r in range(header_row + 1, (ws.max_row or header_row) + 1):
-            fba = _norm(ws.cell(r, headers[fba_col]).value)
+            raw_fba = _norm(ws.cell(r, headers[fba_col]).value)
             sku = _norm(ws.cell(r, headers[sku_col]).value)
-            if not fba and not sku:
+            raw_total_boxes = (
+                _to_float(ws.cell(r, headers[total_boxes_col]).value) if total_boxes_col else 0.0
+            )
+            raw_total_w = _to_float(ws.cell(r, headers[total_w_col]).value) if total_w_col else 0.0
+            raw_box_count = (
+                _to_float(ws.cell(r, headers[box_count_col]).value) if box_count_col else 0.0
+            )
+            raw_box_w = _to_float(ws.cell(r, headers[box_w_col]).value) if box_w_col else 0.0
+
+            if not raw_fba and not sku:
                 continue
+
+            fba = raw_fba or last_fba
             if not fba or not sku:
                 continue
 
+            if raw_fba:
+                # New shipment header row: reset carry state from this row only
+                last_fba = raw_fba
+                last_total_boxes = raw_total_boxes if raw_total_boxes > 0 else 0.0
+                last_total_w = raw_total_w if raw_total_w > 0 else 0.0
+                last_box_count = raw_box_count if raw_box_count > 0 else 0.0
+                last_box_w = raw_box_w if raw_box_w > 0 else 0.0
+                boxes = last_box_count
+            else:
+                # Continuation SKU row: forward-fill blanks from previous header
+                boxes = raw_box_count if raw_box_count > 0 else last_box_count
+                if raw_box_count > 0:
+                    last_box_count = raw_box_count
+                if raw_total_boxes > 0:
+                    last_total_boxes = raw_total_boxes
+                if raw_total_w > 0:
+                    last_total_w = raw_total_w
+                if raw_box_w > 0:
+                    last_box_w = raw_box_w
+
+            # qty = 单箱数量 × 箱数 (箱数 blank on continuation → forward-filled)
             if qty_per_box_col:
                 per_box = _to_float(ws.cell(r, headers[qty_per_box_col]).value)
-                boxes = _to_float(ws.cell(r, headers[box_count_col]).value) if box_count_col else 0.0
                 if boxes > 0:
                     qty = per_box * boxes
                 else:
@@ -279,27 +322,18 @@ def parse_packing(
             else:
                 qty = _to_float(ws.cell(r, headers[qty_col]).value)
 
-            if total_w_col:
-                tw = _to_float(ws.cell(r, headers[total_w_col]).value)
-                if tw > 0 and fba not in ship_total_w:
-                    ship_total_w[fba] = tw
-            if box_w_col:
-                bw = _to_float(ws.cell(r, headers[box_w_col]).value)
-                if bw > 0:
-                    # If 箱数>1 and 箱子重量 looks per-box, multiply; sample data has
-                    # 箱子重量 == 总重量 when 箱数=1. Prefer adding row weight as-is
-                    # when 总重量 missing; when 箱数 present and total missing, * boxes.
-                    boxes = _to_float(ws.cell(r, headers[box_count_col]).value) if box_count_col else 1.0
-                    if fba not in ship_total_w and boxes > 1 and bw * boxes > bw:
-                        ship_box_w_sum[fba] += bw * boxes
-                    else:
-                        ship_box_w_sum[fba] += bw
+            # shipment gross: 总重量 once per FBA, else sum explicit 箱子重量 cells only
+            # (never re-add forward-filled weight on continuation rows)
+            if raw_total_w > 0 and fba not in ship_total_w:
+                ship_total_w[fba] = raw_total_w
+            if raw_box_w > 0:
+                bcount = raw_box_count if raw_box_count > 0 else 1.0
+                if fba not in ship_total_w and bcount > 1:
+                    ship_box_w_sum[fba] += raw_box_w * bcount
+                else:
+                    ship_box_w_sum[fba] += raw_box_w
 
-            row_unit_w = 0.0
-            if unit_w_col:
-                row_unit_w = _to_float(ws.cell(r, headers[unit_w_col]).value)
-            if row_unit_w <= 0 and sku in unit_weights:
-                row_unit_w = float(unit_weights[sku])
+            row_unit_w = float(unit_weights[sku]) if sku in unit_weights else 0.0
 
             shop = ""
             if shop_col:

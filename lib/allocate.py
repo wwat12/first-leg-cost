@@ -19,8 +19,9 @@ def allocate_by_weight(
          单SKU则货件运费全归该SKU
       ③ 单件头程＝SKU分摊÷数量；同SKU多货件：合计分摊÷合计数量
 
-    Multi-SKU shipments require unit packed weight; otherwise return Chinese error
-    listing those shipments. Single-SKU works without unit weight.
+    Multi-SKU shipments matched on the bill require unit packed weight (optional
+    upload). Missing ones are skipped (listed in multi_sku_missing_unit_weight /
+    unmatched_freight); other tickets still allocate. Single-SKU needs no unit weight.
 
     Output is keyed by (shop, sku). Shop comes from packing/shipment data when
     present; otherwise the optional shop argument / blank.
@@ -78,9 +79,28 @@ def allocate_by_weight(
             if uw_sum > 0:
                 shipment_weights[fba] = uw_sum
 
-    # Pre-check multi-SKU missing unit weight
+    # Each freight row is one ticket (keyed by ticket_id / 扩展单号+金额+收费重).
+    # 运单号 is not used for grouping or matching.
+    by_ticket: dict[str, list[dict]] = defaultdict(list)
+    for r in freight_rows:
+        tid = r.get("ticket_id") or (
+            f"{r.get('ext_nos') or ''}|{float(r.get('amount_cny') or 0):.4f}|"
+            f"{float(r.get('chargeable_weight') or 0):.4f}#row:{r.get('row_index')}"
+        )
+        by_ticket[tid].append(r)
+
+    # Multi-SKU unit-weight check only for FBAs that appear on the bill tickets
+    bill_fbas: set[str] = set()
+    for lines in by_ticket.values():
+        for line in lines:
+            for fid in line.get("fba_ids") or []:
+                if fid:
+                    bill_fbas.add(str(fid).strip())
+
     multi_sku_missing: list[dict[str, Any]] = []
     for fba, lines in skus_by_fba.items():
+        if fba not in bill_fbas:
+            continue
         if len(lines) <= 1:
             continue
         missing = [x["sku"] for x in lines if float(x.get("unit_weight") or 0) <= 0]
@@ -93,38 +113,8 @@ def allocate_by_weight(
                 }
             )
 
-    if multi_sku_missing:
-        detail = "；".join(
-            f"{m['fba_id']}（SKU: {', '.join(m['skus'])}，缺单件重量: {', '.join(m['missing_unit_weight_skus'])}）"
-            for m in multi_sku_missing
-        )
-        return {
-            "ok": False,
-            "error": (
-                "以下多SKU货件缺少「单件含包装重量」，无法按重量分摊。"
-                "请上传单件重量表，或在装箱/货件数据中提供单件重量："
-                f"{detail}"
-            ),
-            "multi_sku_missing_unit_weight": multi_sku_missing,
-            "sku_results": [],
-            "shipment_allocs": [],
-            "unmatched_freight": [],
-            "unmatched_fba_on_bill": [],
-            "matched_fba_count": 0,
-            "sku_count": 0,
-            "total_allocated": 0.0,
-            "included_bill_freight": 0.0,
-        }
-
-    # Each freight row is one ticket (keyed by ticket_id / 扩展单号+金额+收费重).
-    # 运单号 is not used for grouping or matching.
-    by_ticket: dict[str, list[dict]] = defaultdict(list)
-    for r in freight_rows:
-        tid = r.get("ticket_id") or (
-            f"{r.get('ext_nos') or ''}|{float(r.get('amount_cny') or 0):.4f}|"
-            f"{float(r.get('chargeable_weight') or 0):.4f}#row:{r.get('row_index')}"
-        )
-        by_ticket[tid].append(r)
+    # Soft-block those FBAs: other tickets still allocate; UI can show missing list.
+    blocked_multi_sku: set[str] = {m["fba_id"] for m in multi_sku_missing}
 
     shipment_allocs: list[dict[str, Any]] = []
     # key: (shop, sku)
@@ -146,8 +136,10 @@ def allocate_by_weight(
                     ticket_fba_ids.append(fid)
         ticket_label = ext_nos or ",".join(ticket_fba_ids) or ticket_id
 
-        present = [fid for fid in ticket_fba_ids if fid in skus_by_fba]
-        if not present:
+        present_all = [fid for fid in ticket_fba_ids if fid in skus_by_fba]
+        blocked_here = [fid for fid in present_all if fid in blocked_multi_sku]
+        present = [fid for fid in present_all if fid not in blocked_multi_sku]
+        if not present_all:
             unmatched_freight.append(
                 {
                     "ticket_id": ticket_id,
@@ -159,6 +151,23 @@ def allocate_by_weight(
                 }
             )
             continue
+        if blocked_here and not present:
+            unmatched_freight.append(
+                {
+                    "ticket_id": ticket_id,
+                    "waybill_no": ticket_label,
+                    "ext_nos": ext_nos,
+                    "freight": ticket_freight,
+                    "fba_ids": ticket_fba_ids,
+                    "reason": (
+                        "多SKU货件缺少单件含包装重量，请上传单件重量表："
+                        + ",".join(blocked_here)
+                    ),
+                }
+            )
+            continue
+        # If ticket mixes OK + blocked FBAs, only allocate the OK ones' weight share
+        # among present (blocked excluded from denominator).
 
         # ① 货件实际毛重
         ship_w: dict[str, float] = {}
@@ -232,6 +241,7 @@ def allocate_by_weight(
         "total_allocated": total_allocated,
         "included_bill_freight": round(included_bill_freight, 4),
         "allocation_balance_ok": abs(total_allocated - round(included_bill_freight, 4)) < 0.05,
+        "multi_sku_missing_unit_weight": multi_sku_missing,
     }
 
 

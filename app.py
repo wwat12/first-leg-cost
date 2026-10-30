@@ -336,6 +336,15 @@ def allocate_route():
         f"匹配货件 {result['matched_fba_count']} 个",
         "ok",
     )
+    missing = result.get("multi_sku_missing_unit_weight") or []
+    if missing:
+        ids = "、".join(m["fba_id"] for m in missing[:8])
+        more = f" 等{len(missing)}个" if len(missing) > 8 else f"（{len(missing)}个）"
+        flash(
+            f"有多SKU货件因缺少单件含包装重量未分摊：{ids}{more}。"
+            "请在步骤 2 上传单件重量表后重新分摊。",
+            "error",
+        )
     return redirect(url_for("index") + "#result")
 
 

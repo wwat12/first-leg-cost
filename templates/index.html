@@ -117,7 +117,7 @@
         <span class="step">2</span>
         <div>
           <h2>上传赛狐装箱信息</h2>
-          <p class="hint tight">赛狐导出含<strong>装箱信息</strong>即可；同文件有「货件信息」时自动带出店铺。货件编号 ↔ 账单扩展单号；毛重取总重量或箱子重量(kg)。</p>
+          <p class="hint tight">上传赛狐导出的<strong>装箱信息</strong>表即可。只解析这些列：<strong>货件编号、总箱数、总重量、SKU、单箱数量、箱数、箱子重量(kg)</strong>。同货件多 SKU 续行若货件编号/总箱数/总重量/箱数/箱子重量留空会自动沿用上一行。数量＝单箱数量×箱数；货件毛重＝总重量（或箱子重量）。货件编号 ↔ 账单扩展单号。单件含包装重量请在下方可选区手动上传（多 SKU 货件分摊用）。</p>
         </div>
       </div>
       <form method="post" action="{{ url_for('upload_saihu') }}" enctype="multipart/form-data" class="upload-box">
