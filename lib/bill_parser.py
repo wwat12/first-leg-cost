@@ -9,9 +9,12 @@ from openpyxl import load_workbook
 
 
 HEADER_KEYS = ("运单号", "费用类型")
+# Allocation inputs (Meitong cleaned sheet letter positions):
+#   G 扩展单号 → FBA list, K 收费重 → weight, R 金额 → CNY freight
 WEIGHT_ALIASES = ("收费重(KG/CBM)", "收费重", "计费重", "计费重量", "收费重量")
-AMOUNT_CNY_ALIASES = ("折合人民币", "折算人民币", "本位币金额")
+AMOUNT_CNY_ALIASES = ("金额",)  # column R; do NOT use 折合人民币 for allocation
 AMOUNT_ALIASES = ("金额",)
+EXT_ALIASES = ("扩展单号",)
 FBA_TOKEN_RE = re.compile(r"FBA[A-Z0-9]+", re.IGNORECASE)
 # Footer / bank lines that appear under detail tables (not fee rows).
 _JUNK_WAYBILL_MARKERS = (
@@ -120,19 +123,15 @@ def _extract_fba_tokens(text: str) -> list[str]:
     return ids
 
 
-def _parse_fba_ids(customer_no: str, ext_nos: str) -> list[str]:
-    """G列扩展单号 is source of truth; fall back to 客户单号 only if empty."""
+def _parse_fba_ids(ext_nos: str, customer_no: str = "") -> list[str]:
+    """FBA list from G列扩展单号 only (allocation ignores 客户单号)."""
     from_ext = _extract_fba_tokens(ext_nos)
     if from_ext:
         return from_ext
-    from_cust = _extract_fba_tokens(customer_no)
-    if from_cust:
-        return from_cust
-    # last resort: treat whole string as one id if it looks like an id
-    for raw in (ext_nos, customer_no):
-        s = _norm(raw)
-        if s and " " not in s and "," not in s and "，" not in s:
-            return [s]
+    # last resort: whole 扩展单号 cell if it looks like a single id
+    s = _norm(ext_nos)
+    if s and " " not in s and "," not in s and "，" not in s:
+        return [s]
     return []
 
 
@@ -234,9 +233,9 @@ def _select_sheets(wb, sheet_name: str | None = None) -> tuple[list[str], str]:
 def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict[str, Any]:
     """Parse a Meitong-style bill. Prefer user-cleaned sheet(s); no fee-type filter.
 
-    User is expected to delete 税金/清关费 rows and leave only the cleaned
-    detail sheet before upload. Every remaining data row is treated as bill
-    cost (freight) for allocation.
+    Allocation uses only three bill columns (plus 运单号 for ticket grouping):
+      G 扩展单号 → FBA list, K 收费重 → weight, R 金额 → CNY freight.
+    Other columns are ignored. User should delete 税金/清关费 rows before upload.
     """
     wb = load_workbook(path, data_only=True)
     try:
@@ -254,35 +253,25 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
             header_row, cols = found
             used_sheets.append(name)
             header_rows[name] = header_row
+            # Structural: 运单号 groups tickets. Allocation inputs only:
+            # G 扩展单号, K 收费重, R 金额 — ignore other bill columns.
             col_waybill = cols["运单号"]
-            col_fee = cols["费用类型"]
-            col_date = cols.get("日期")
-            col_customer = cols.get("客户单号")
-            col_tracking = cols.get("转单号")
-            col_ext = cols.get("扩展单号")
-            col_service = cols.get("服务类型")
-            col_wh = cols.get("仓库代码")
-            col_zip = cols.get("邮编")
+            col_fee = cols.get("费用类型")  # only used to skip 合计 footer rows
+            col_ext = _pick_col(cols, EXT_ALIASES) or cols.get("扩展单号")
             col_weight = _pick_col(cols, WEIGHT_ALIASES)
-            col_price = cols.get("单价")
-            col_unit = cols.get("单价单位")
-            col_qty = cols.get("数量")
-            col_pieces = cols.get("件数")
-            col_country = cols.get("发往国家")
-            col_currency = cols.get("币种")
-            col_amount = _pick_col(cols, AMOUNT_ALIASES)
-            col_rate = cols.get("汇率")
-            col_cny = _pick_col(cols, AMOUNT_CNY_ALIASES)
-            col_status = cols.get("运单状态")
-            col_desc = cols.get("描述")
-            col_customs = cols.get("报关方式")
+            col_amount = _pick_col(cols, AMOUNT_ALIASES)  # R 金额 (CNY)
+            # Cleaned Meitong layout fallback by letter when headers missing aliases
+            if col_ext is None and header_row == 1:
+                col_ext = 7  # G
+            if col_weight is None and header_row == 1:
+                col_weight = 11  # K
+            if col_amount is None and header_row == 1:
+                col_amount = 18  # R
 
             for r in range(header_row + 1, (ws.max_row or header_row) + 1):
                 waybill = _norm(ws.cell(r, col_waybill).value)
-                fee = _norm(ws.cell(r, col_fee).value)
+                fee = _norm(ws.cell(r, col_fee).value) if col_fee else ""
 
-                if not waybill and not fee:
-                    continue
                 if not waybill:
                     continue
                 if _is_junk_waybill(waybill):
@@ -291,41 +280,37 @@ def parse_bill(path: str, shop: str = "", sheet_name: str | None = None) -> dict
                     continue
 
                 weight = _to_float(ws.cell(r, col_weight).value) if col_weight else None
-                amount = _to_float(ws.cell(r, col_amount).value) if col_amount else None
-                amount_cny = _to_float(ws.cell(r, col_cny).value) if col_cny else None
+                amount_cny = _to_float(ws.cell(r, col_amount).value) if col_amount else None
                 if amount_cny is None:
-                    amount_cny = amount if amount is not None else 0.0
-                if amount is None:
-                    amount = amount_cny
+                    amount_cny = 0.0
 
-                customer_no = _norm(ws.cell(r, col_customer).value) if col_customer else ""
                 ext_nos = _norm(ws.cell(r, col_ext).value) if col_ext else ""
 
                 row = FreightRow(
                     row_index=r,
                     waybill_no=waybill,
                     fee_type=fee or "运费",
-                    date=_norm(ws.cell(r, col_date).value) if col_date else "",
-                    customer_no=customer_no,
-                    tracking_no=_norm(ws.cell(r, col_tracking).value) if col_tracking else "",
+                    date="",
+                    customer_no="",
+                    tracking_no="",
                     ext_nos=ext_nos,
-                    service_type=_norm(ws.cell(r, col_service).value) if col_service else "",
-                    warehouse=_norm(ws.cell(r, col_wh).value) if col_wh else "",
-                    zipcode=_norm(ws.cell(r, col_zip).value) if col_zip else "",
+                    service_type="",
+                    warehouse="",
+                    zipcode="",
                     chargeable_weight=weight or 0.0,
-                    unit_price=_to_float(ws.cell(r, col_price).value) if col_price else None,
-                    unit=_norm(ws.cell(r, col_unit).value) if col_unit else "",
-                    quantity=_to_float(ws.cell(r, col_qty).value) if col_qty else None,
-                    pieces=_to_float(ws.cell(r, col_pieces).value) if col_pieces else None,
-                    country=_norm(ws.cell(r, col_country).value) if col_country else "",
-                    currency=_norm(ws.cell(r, col_currency).value) if col_currency else "",
-                    amount=amount or 0.0,
-                    exchange_rate=_to_float(ws.cell(r, col_rate).value) if col_rate else None,
-                    amount_cny=amount_cny or 0.0,
-                    status=_norm(ws.cell(r, col_status).value) if col_status else "",
-                    description=_norm(ws.cell(r, col_desc).value) if col_desc else "",
-                    customs_mode=_norm(ws.cell(r, col_customs).value) if col_customs else "",
-                    fba_ids=_parse_fba_ids(customer_no, ext_nos),
+                    unit_price=None,
+                    unit="",
+                    quantity=None,
+                    pieces=None,
+                    country="",
+                    currency="CNY",
+                    amount=amount_cny,
+                    exchange_rate=None,
+                    amount_cny=amount_cny,
+                    status="",
+                    description="",
+                    customs_mode="",
+                    fba_ids=_parse_fba_ids(ext_nos),
                     shop=shop,
                     sheet=name,
                 )

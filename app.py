@@ -159,7 +159,7 @@ def upload_bill():
             + (f"（{mode_hint}）" if mode_hint else "")
             + f"；运费合计 ¥{result['total_freight']:.2f}，"
             f"{result['freight_row_count']} 行 / {result['ticket_count']} 票"
-            "（货件号取自 G列扩展单号）",
+            "（分摊列：G扩展单号 / K收费重 / R金额）",
             "ok",
         )
     state = _load_state()
