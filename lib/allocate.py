@@ -116,10 +116,15 @@ def allocate_by_weight(
             "included_bill_freight": 0.0,
         }
 
-    # Group freight rows by waybill (票)
+    # Each freight row is one ticket (keyed by ticket_id / 扩展单号+金额+收费重).
+    # 运单号 is not used for grouping or matching.
     by_ticket: dict[str, list[dict]] = defaultdict(list)
     for r in freight_rows:
-        by_ticket[r["waybill_no"]].append(r)
+        tid = r.get("ticket_id") or (
+            f"{r.get('ext_nos') or ''}|{float(r.get('amount_cny') or 0):.4f}|"
+            f"{float(r.get('chargeable_weight') or 0):.4f}#row:{r.get('row_index')}"
+        )
+        by_ticket[tid].append(r)
 
     shipment_allocs: list[dict[str, Any]] = []
     # key: (shop, sku)
@@ -129,19 +134,25 @@ def allocate_by_weight(
     matched_fba: set[str] = set()
     included_bill_freight = 0.0
 
-    for waybill, lines in by_ticket.items():
+    for ticket_id, lines in by_ticket.items():
         ticket_freight = sum(float(x["amount_cny"]) for x in lines)
         ticket_fba_ids: list[str] = []
+        ext_nos = ""
         for line in lines:
+            if not ext_nos:
+                ext_nos = str(line.get("ext_nos") or "")
             for fid in line.get("fba_ids") or []:
                 if fid not in ticket_fba_ids:
                     ticket_fba_ids.append(fid)
+        ticket_label = ext_nos or ",".join(ticket_fba_ids) or ticket_id
 
         present = [fid for fid in ticket_fba_ids if fid in skus_by_fba]
         if not present:
             unmatched_freight.append(
                 {
-                    "waybill_no": waybill,
+                    "ticket_id": ticket_id,
+                    "waybill_no": ticket_label,  # UI/export label (ext / FBA)
+                    "ext_nos": ext_nos,
                     "freight": ticket_freight,
                     "fba_ids": ticket_fba_ids,
                     "reason": "无赛狐装箱货件匹配（扩展单号 ↔ 货件编号）",
@@ -161,7 +172,9 @@ def allocate_by_weight(
         if total_ship_w <= 0:
             unmatched_freight.append(
                 {
-                    "waybill_no": waybill,
+                    "ticket_id": ticket_id,
+                    "waybill_no": ticket_label,
+                    "ext_nos": ext_nos,
                     "freight": ticket_freight,
                     "fba_ids": present,
                     "reason": "匹配货件实际毛重之和为0（请检查装箱信息总重量/箱子重量）",
@@ -177,10 +190,12 @@ def allocate_by_weight(
                 fid,
                 ship_freight,
                 skus_by_fba[fid],
-                waybill,
+                ticket_id,
                 ship_w[fid],
                 shipment_allocs,
                 sku_costs,
+                ticket_label=ticket_label,
+                ext_nos=ext_nos,
             )
             matched_fba.add(fid)
 
@@ -224,10 +239,12 @@ def _allocate_skus_in_shipment(
     fba_id: str,
     ship_freight: float,
     sku_lines: list[dict],
-    waybill: str,
+    ticket_id: str,
     ship_gross_weight: float,
     shipment_allocs: list,
     sku_costs: dict,
+    ticket_label: str = "",
+    ext_nos: str = "",
 ) -> None:
     """
     ② SKU分摊：单SKU → 全归该SKU；
@@ -246,12 +263,15 @@ def _allocate_skus_in_shipment(
             share = ship_freight * (sw / total_w) if total_w > 0 else 0.0
             shares.append((s, share, sw))
 
+    label = ticket_label or ext_nos or ticket_id
     for s, share, sku_total_w in shares:
         line_shop = s.get("shop") or ""
         shipment_allocs.append(
             {
                 "shop": line_shop,
-                "waybill_no": waybill,
+                "ticket_id": ticket_id,
+                "waybill_no": label,  # display/export label (ext / FBA), not 运单号
+                "ext_nos": ext_nos,
                 "fba_id": fba_id,
                 "sku": s["sku"],
                 "qty": s["qty"],
@@ -280,26 +300,17 @@ def _allocate_skus_in_shipment(
 
 
 def freight_by_shipment_export_rows(freight_rows: list[dict], shop: str = "") -> list[dict]:
-    """Flatten freight rows for CSV/XLSX download (no Saihu needed)."""
+    """Flatten freight rows for CSV/XLSX download (no Saihu needed). G/K/R only."""
     out = []
     for r in freight_rows:
         out.append(
             {
                 "店铺": shop or r.get("shop") or "",
-                "运单号": r.get("waybill_no"),
-                "客户单号": r.get("customer_no"),
+                "票标识": r.get("ticket_id") or "",
                 "扩展单号": r.get("ext_nos"),
                 "FBA货件号列表": ",".join(r.get("fba_ids") or []),
-                "服务类型": r.get("service_type"),
-                "仓库代码": r.get("warehouse"),
                 "收费重": r.get("chargeable_weight"),
-                "件数": r.get("pieces"),
-                "发往国家": r.get("country"),
-                "币种": r.get("currency"),
-                "金额": r.get("amount"),
-                "折合人民币": r.get("amount_cny"),
-                "日期": r.get("date"),
-                "运单状态": r.get("status"),
+                "金额": r.get("amount_cny") if r.get("amount_cny") is not None else r.get("amount"),
             }
         )
     return out

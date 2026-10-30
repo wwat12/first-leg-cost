@@ -43,7 +43,7 @@
         <li><strong>SKU 分摊</strong>＝货件运费 ×（发货数量×单件含包装重量）÷ 货件内 SKU 总重之和。货件内仅 1 个 SKU 时，运费全归该 SKU</li>
         <li><strong>单件头程</strong>＝SKU 分摊 ÷ 数量；同 SKU 多货件时用合计分摊 ÷ 合计数量</li>
       </ol>
-      <p class="hint tight">账单按<strong>运单号</strong>成票；分摊金额/重量/货件只取 <strong>R 金额</strong>、<strong>K 收费重</strong>、<strong>G 扩展单号</strong>（上传前请删掉税金/清关费行，只保留已整理明细表；网站默认只读已整理表头，不筛选费用类型）。货件 FBA… 与赛狐<strong>装箱信息·货件编号</strong>对应。重量单位 kg；有店铺列时按店铺+SKU 汇总。</p>
+      <p class="hint tight">账单每一明细行即一票（按 <strong>G 扩展单号</strong>+<strong>R 金额</strong>+<strong>K 收费重</strong> 标识；不用运单号）。分摊只取这三列（上传前请删掉税金/清关费行，只保留已整理明细表；网站默认只读已整理表头，不筛选费用类型）。货件 FBA… 与赛狐<strong>装箱信息·货件编号</strong>对应。重量单位 kg；有店铺列时按店铺+SKU 汇总。</p>
     </details>
 
     <section class="card" id="bill">
@@ -51,7 +51,7 @@
         <span class="step">1</span>
         <div>
           <h2>上传物流账单</h2>
-          <p class="hint tight">美通风格对账单 .xlsx。默认只读<strong>已整理</strong>工作表（首行含「序号」/「运单号」）。分摊只用三列：<strong>G 扩展单号</strong>（FBA）、<strong>K 收费重</strong>、<strong>R 金额</strong>（人民币）；运单号仅用于成票。跳过「汇总」。</p>
+          <p class="hint tight">美通风格对账单 .xlsx。默认只读<strong>已整理</strong>工作表（首行含「序号」/「扩展单号」等）。只用三列：<strong>G 扩展单号</strong>（FBA）、<strong>K 收费重</strong>、<strong>R 金额</strong>（人民币）；每行一票，不用运单号。跳过「汇总」。</p>
         </div>
       </div>
       <form method="post" action="{{ url_for('upload_bill') }}" enctype="multipart/form-data" class="upload-box">
@@ -67,7 +67,7 @@
       {% if bill and bill.rows %}
       <div class="summary-grid">
         <div class="stat"><div class="num">¥{{ '%.2f'|format(bill.total_freight) }}</div><div class="lbl">运费合计</div></div>
-        <div class="stat"><div class="num">{{ bill.ticket_count }}</div><div class="lbl">运单（票）</div></div>
+        <div class="stat"><div class="num">{{ bill.ticket_count }}</div><div class="lbl">票（明细行）</div></div>
         <div class="stat"><div class="num">{{ bill.freight_row_count }}</div><div class="lbl">明细行</div></div>
         <div class="stat"><div class="num">{{ '%.1f'|format(bill.total_weight) }}</div><div class="lbl">收费重 kg</div></div>
       </div>
@@ -87,7 +87,6 @@
         <table>
           <thead>
             <tr>
-              <th>运单号</th>
               <th>G 扩展单号 / FBA</th>
               <th class="num">K 收费重</th>
               <th class="num">R 金额</th>
@@ -96,7 +95,6 @@
           <tbody>
             {% for r in bill.rows[:200] %}
             <tr>
-              <td>{{ r.waybill_no }}</td>
               <td class="small">{{ r.ext_nos }}</td>
               <td class="num">{{ r.chargeable_weight }}</td>
               <td class="num">{{ '%.2f'|format(r.amount_cny) }}</td>
@@ -308,7 +306,7 @@
         <summary>未匹配运费明细（{{ alloc.unmatched_freight|length }}）</summary>
         <ul class="small unmatched">
           {% for u in alloc.unmatched_freight %}
-            <li>{{ u.waybill_no }} · ¥{{ '%.2f'|format(u.freight) }} · {{ u.reason }} · {{ u.fba_ids|join(',') }}</li>
+            <li>{{ u.ext_nos or u.waybill_no }} · ¥{{ '%.2f'|format(u.freight) }} · {{ u.reason }} · {{ u.fba_ids|join(',') }}</li>
           {% endfor %}
         </ul>
       </details>

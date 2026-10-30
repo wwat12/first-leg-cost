@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression: ticket NJHL2609107951 → ¥33.24 / ¥20.86 (±0.02)."""
+"""Regression: row with FBAs FBA15MB02L89/… @ ¥562.50 → LR-BB223≈33.24 / LR-BB232≈20.86."""
 from __future__ import annotations
 
 import sys
@@ -23,10 +23,22 @@ def main() -> int:
     bill = parse_bill(str(bill_path))
     assert bill.get("ok") and bill.get("rows"), bill
 
-    ticket = "NJHL2609107951"
-    trows = [r for r in bill["rows"] if r["waybill_no"] == ticket]
+    target_fbas = {"FBA15MB02L89", "FBA15MB030DD", "FBA15MB0BFP3"}
+    trows = [
+        r
+        for r in bill["rows"]
+        if abs(float(r["amount_cny"]) - 562.50) < 0.01
+        and target_fbas.issubset(set(r.get("fba_ids") or []))
+    ]
     if not trows:
-        print(f"FAIL: ticket {ticket} not in bill {bill_path.name}")
+        # fallback: match by extension containing all three FBAs
+        trows = [
+            r
+            for r in bill["rows"]
+            if target_fbas.issubset(set(r.get("fba_ids") or []))
+        ]
+    if not trows:
+        print(f"FAIL: target FBA ticket not in bill {bill_path.name}")
         return 1
 
     freight = sum(r["amount_cny"] for r in trows)
@@ -35,9 +47,12 @@ def main() -> int:
         for f in r["fba_ids"]:
             if f not in fbas:
                 fbas.append(f)
-    print(f"ticket {ticket}: freight={freight}, fbas={fbas}")
+    print(
+        f"ticket ext={trows[0].get('ext_nos')!r} id={trows[0].get('ticket_id')!r}: "
+        f"freight={freight}, fbas={fbas}"
+    )
     assert abs(freight - 562.50) < 0.01, freight
-    assert set(fbas) == {"FBA15MB02L89", "FBA15MB030DD", "FBA15MB0BFP3"}
+    assert set(fbas) == target_fbas
 
     packing = parse_packing(str(saihu_path))
     assert packing.get("ok"), packing
@@ -46,7 +61,6 @@ def main() -> int:
         f"shops={packing.get('shops')}"
     )
 
-    # weights for example FBAs
     for fid in fbas:
         w = packing["shipment_weights"].get(fid)
         print(f"  {fid} gross={w}")
@@ -81,7 +95,6 @@ def main() -> int:
         f"balance={result['allocation_balance_ok']}"
     )
 
-    # Full sept bill balance check (matched tickets only)
     full = allocate_by_weight(
         bill["rows"],
         packing["rows"],
@@ -95,10 +108,16 @@ def main() -> int:
     )
     assert full["allocation_balance_ok"]
 
-    # Shop dimension present
     shops = {r["shop"] for r in full["sku_results"]}
     print(f"shops in output: {shops}")
     assert any(s for s in shops), "expected shop dimension from 货件信息"
+
+    # each data row is one ticket
+    assert bill["ticket_count"] == bill["freight_row_count"], (
+        bill["ticket_count"],
+        bill["freight_row_count"],
+    )
+    print(f"tickets==rows: {bill['ticket_count']}")
 
     if not (ok223 and ok232):
         return 1

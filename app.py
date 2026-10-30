@@ -351,17 +351,16 @@ def export_freight():
     ws = wb.active
     ws.title = "运费按货件"
     _write_sheet(ws, rows)
-    ws2 = wb.create_sheet("按运单汇总")
+    ws2 = wb.create_sheet("按票汇总")
     ticket_rows = []
     for t in bill.get("tickets") or []:
         ticket_rows.append(
             {
-                "运单号": t["waybill_no"],
+                "票标识": t.get("ticket_id") or "",
+                "扩展单号": t.get("ext_nos") or "",
                 "运费合计": round(t["freight_total"], 4),
-                "收费重合计": round(t["weight_total"], 4),
-                "运费行数": t["line_count"],
+                "收费重": round(t["weight_total"], 4),
                 "FBA货件号(扩展单号)": ",".join(t.get("fba_ids") or []),
-                "客户单号": ",".join(t.get("customer_nos") or []),
             }
         )
     _write_sheet(ws2, ticket_rows)
@@ -372,7 +371,7 @@ def export_freight():
             {
                 "明细表": bill.get("sheet"),
                 "运费行数": bill.get("freight_row_count"),
-                "运单数": bill.get("ticket_count"),
+                "票数": bill.get("ticket_count"),
                 "运费合计_CNY": bill.get("total_freight"),
                 "收费重合计": bill.get("total_weight"),
                 "明细表列表": ",".join(bill.get("sheets") or ([bill.get("sheet")] if bill.get("sheet") else [])),
@@ -416,7 +415,8 @@ def export_sku():
         detail_rows.append(
             {
                 "店铺": r.get("shop") or "",
-                "运单号": r["waybill_no"],
+                "票标识": r.get("ticket_id") or r.get("waybill_no") or "",
+                "扩展单号": r.get("ext_nos") or "",
                 "FBA货件号": r["fba_id"],
                 "SKU": r["sku"],
                 "数量": r["qty"],
@@ -434,7 +434,8 @@ def export_sku():
             ws3,
             [
                 {
-                    "运单号": u["waybill_no"],
+                    "票标识": u.get("ticket_id") or "",
+                    "扩展单号": u.get("ext_nos") or u.get("waybill_no") or "",
                     "运费": u["freight"],
                     "FBA货件号": ",".join(u.get("fba_ids") or []),
                     "原因": u.get("reason"),
