@@ -1,0 +1,12 @@
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+uploads/*
+!uploads/.gitkeep
+exports/*
+!exports/.gitkeep
+.git
+*.md
+_win_*.ps1
+logs
